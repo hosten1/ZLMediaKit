@@ -14,6 +14,8 @@
 #include "Extension/Frame.h"
 #include "Extension/Track.h"
 
+#include "src/Codec/Transcode.h"
+
 #define H264_TYPE(v) ((uint8_t)(v) & 0x1F)
 
 namespace mediakit{
@@ -98,7 +100,7 @@ using H264FrameNoCacheAble = H264FrameHelper<FrameFromPtr>;
  
  * [AUTO-TRANSLATED:6936e76d]
  */
-class H264Track : public VideoTrack {
+class H264Track : public VideoTrack, public std::enable_shared_from_this<H264Track>  {
 public:
     using Ptr = std::shared_ptr<H264Track>;
 
@@ -128,7 +130,7 @@ public:
      * [AUTO-TRANSLATED:702c1433]
      */
     H264Track(const std::string &sps, const std::string &pps, int sps_prefix_len = 4, int pps_prefix_len = 4);
-
+    ~H264Track(); // 确保析构函数被声明为虚函数
     bool ready() const override;
     CodecId getCodecId() const override;
     int getVideoHeight() const override;
@@ -156,6 +158,8 @@ private:
     float _fps = 0;
     std::string _sps;
     std::string _pps;
+    FFmpegDecoder::Ptr _decoder;  // FFmpeg 解码器实例
+    FFmpegWatermark::Ptr _watermark;  // FFmpeg 水印
 };
 
 template <typename FrameType>

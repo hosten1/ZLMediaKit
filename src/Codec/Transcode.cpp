@@ -396,33 +396,33 @@ FFmpegDecoder::FFmpegDecoder(const Track::Ptr &track, int thread_num, const std:
     }
 
     while (true) {
-        _context.reset(avcodec_alloc_context3(codec), [](AVCodecContext *ctx) {
+        _decoder_context.reset(avcodec_alloc_context3(codec), [](AVCodecContext *ctx) {
             avcodec_free_context(&ctx);
         });
 
-        if (!_context) {
+        if (!_decoder_context) {
             throw std::runtime_error("创建解码器失败");
         }
 
         // 保存AVFrame的引用  [AUTO-TRANSLATED:2df53d07]
         // Save the AVFrame reference
 #ifdef FF_API_OLD_ENCDEC
-        _context->refcounted_frames = 1;
+        _decoder_context->refcounted_frames = 1;
 #endif
-        _context->flags |= AV_CODEC_FLAG_LOW_DELAY;
-        _context->flags2 |= AV_CODEC_FLAG2_FAST;
+        _decoder_context->flags |= AV_CODEC_FLAG_LOW_DELAY;
+        _decoder_context->flags2 |= AV_CODEC_FLAG2_FAST;
         if (track->getTrackType() == TrackVideo) {
-            _context->width = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
-            _context->height = static_pointer_cast<VideoTrack>(track)->getVideoHeight();
+            _decoder_context->width = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
+            _decoder_context->height = static_pointer_cast<VideoTrack>(track)->getVideoHeight();
         }
 
         switch (track->getCodecId()) {
             case CodecG711A:
             case CodecG711U: {
                 AudioTrack::Ptr audio = static_pointer_cast<AudioTrack>(track);
-                _context->channels = audio->getAudioChannel();
-                _context->sample_rate = audio->getAudioSampleRate();
-                _context->channel_layout = av_get_default_channel_layout(_context->channels);
+                _decoder_context->channels = audio->getAudioChannel();
+                _decoder_context->sample_rate = audio->getAudioSampleRate();
+                _decoder_context->channel_layout = av_get_default_channel_layout(_decoder_context->channels);
                 break;
             }
             default:
@@ -440,7 +440,7 @@ FFmpegDecoder::FFmpegDecoder(const Track::Ptr &track, int thread_num, const std:
 #ifdef AV_CODEC_CAP_TRUNCATED
         if (codec->capabilities & AV_CODEC_CAP_TRUNCATED) {
             /* we do not send complete frames */
-            _context->flags |= AV_CODEC_FLAG_TRUNCATED;
+            _decoder_context->flags |= AV_CODEC_FLAG_TRUNCATED;
             _do_merger = false;
         } else {
             // 此时业务层应该需要合帧  [AUTO-TRANSLATED:8dea0fff]
@@ -449,7 +449,7 @@ FFmpegDecoder::FFmpegDecoder(const Track::Ptr &track, int thread_num, const std:
         }
 #endif
 
-        int ret = avcodec_open2(_context.get(), codec, &dict);
+        int ret = avcodec_open2(_decoder_context.get(), codec, &dict);
         av_dict_free(&dict);
         if (ret >= 0) {
             // 成功  [AUTO-TRANSLATED:7d878ca9]
@@ -480,9 +480,9 @@ FFmpegDecoder::~FFmpegDecoder() {
 void FFmpegDecoder::flush() {
     while (true) {
         auto out_frame = std::make_shared<FFmpegFrame>();
-        auto ret = avcodec_receive_frame(_context.get(), out_frame->get());
+        auto ret = avcodec_receive_frame(_decoder_context.get(), out_frame->get());
         if (ret == AVERROR(EAGAIN)) {
-            avcodec_send_packet(_context.get(), nullptr);
+            avcodec_send_packet(_decoder_context.get(), nullptr);
             continue;
         }
         if (ret == AVERROR_EOF) {
@@ -497,7 +497,10 @@ void FFmpegDecoder::flush() {
 }
 
 const AVCodecContext *FFmpegDecoder::getContext() const {
-    return _context.get();
+    return _decoder_context.get();
+}
+const AVCodecContext *FFmpegDecoder::getDecoderContext() const {
+    return getContext();
 }
 
 bool FFmpegDecoder::inputFrame_l(const Frame::Ptr &frame, bool live, bool enable_merge) {
@@ -542,7 +545,7 @@ bool FFmpegDecoder::decodeFrame(const char *data, size_t size, uint64_t dts, uin
         pkt->flags |= AV_PKT_FLAG_KEY;
     }
 
-    auto ret = avcodec_send_packet(_context.get(), pkt.get());
+    auto ret = avcodec_send_packet(_decoder_context.get(), pkt.get());
     if (ret < 0) {
         if (ret != AVERROR_INVALIDDATA) {
             WarnL << "avcodec_send_packet failed:" << ffmpeg_err(ret);
@@ -551,8 +554,9 @@ bool FFmpegDecoder::decodeFrame(const char *data, size_t size, uint64_t dts, uin
     }
 
     while (true) {
+        AVFrame *temp_frame = av_frame_alloc();
         auto out_frame = std::make_shared<FFmpegFrame>();
-        ret = avcodec_receive_frame(_context.get(), out_frame->get());
+        ret = avcodec_receive_frame(_decoder_context.get(), temp_frame);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
             break;
         }
@@ -560,13 +564,20 @@ bool FFmpegDecoder::decodeFrame(const char *data, size_t size, uint64_t dts, uin
             WarnL << "avcodec_receive_frame failed:" << ffmpeg_err(ret);
             break;
         }
-        if (live && pts - out_frame->get()->pts > MAX_DELAY_SECOND * 1000 && _ticker.createdTime() > 10 * 1000) {
+        
+
+        if (live && pts - temp_frame->pts > MAX_DELAY_SECOND * 1000 && _ticker.createdTime() > 10 * 1000) {
             // 后面的帧才忽略,防止Track无法ready  [AUTO-TRANSLATED:23f1a7c9]
             // The following frames are ignored to prevent the Track from being ready
-            WarnL << "解码时，忽略" << MAX_DELAY_SECOND << "秒前的数据:" << pts << " " << out_frame->get()->pts;
+            WarnL << "解码时，忽略" << MAX_DELAY_SECOND << "秒前的数据:" << pts << " " << temp_frame->pts;
             continue;
         }
-        onDecode(out_frame);
+        // if(_watermark == nullptr){
+        //     _watermark = std::make_shared<FFmpegWatermark>("dddd");
+        // }
+        
+        // _watermark->save_avframe_to_yuv(temp_frame);
+        onDecode(temp_frame);
     }
     return true;
 }
@@ -574,13 +585,20 @@ bool FFmpegDecoder::decodeFrame(const char *data, size_t size, uint64_t dts, uin
 void FFmpegDecoder::setOnDecode(FFmpegDecoder::onDec cb) {
     _cb = std::move(cb);
 }
+void FFmpegDecoder::setOnDecode(FFmpegDecoder::onDecAvframe cb) {
+    _cb_avframe = std::move(cb);
+}
 
 void FFmpegDecoder::onDecode(const FFmpegFrame::Ptr &frame) {
     if (_cb) {
         _cb(frame);
     }
 }
-
+void FFmpegDecoder::onDecode(const AVFrame *frame) {
+    if (_cb_avframe) {
+        _cb_avframe(frame);
+    }
+}
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 FFmpegSwr::FFmpegSwr(AVSampleFormat output, int channel, int channel_layout, int samplerate) {
@@ -703,6 +721,392 @@ FFmpegFrame::Ptr FFmpegSws::inputFrame(const FFmpegFrame::Ptr &frame, int &ret, 
         return out;
     }
     return nullptr;
+}
+
+// FFmpegEncoder::FFmpegEncoder(const Track::Ptr &track, int thread_num, const std::vector<std::string> &codec_name) {
+//     setupFFmpeg();
+//     const AVCodec *codec = nullptr;
+//     const AVCodec *codec_default = nullptr;
+//     if (!codec_name.empty()) {
+//         codec = getCodecByName(codec_name);
+//     }
+//     switch (track->getCodecId()) {
+//         case CodecH264:
+//             codec_default = getCodec({AV_CODEC_ID_H264});
+//             if (codec && codec->id == AV_CODEC_ID_H264) {
+//                 break;
+//             }
+//             codec = getCodec({"libx264"});
+//             break;
+//         case CodecH265:
+//             codec_default = getCodec({AV_CODEC_ID_HEVC});
+//             if (codec && codec->id == AV_CODEC_ID_HEVC) {
+//                 break;
+//             }
+//             codec = getCodec({"libx265"});
+//             break;
+//         case CodecAAC:
+//             if (codec && codec->id == AV_CODEC_ID_AAC) {
+//                 break;
+//             }
+//             codec = getCodec({AV_CODEC_ID_AAC});
+//             break;
+//         case CodecG711A:
+//             if (codec && codec->id == AV_CODEC_ID_PCM_ALAW) {
+//                 break;
+//             }
+//             codec = getCodec({AV_CODEC_ID_PCM_ALAW});
+//             break;
+//         case CodecG711U:
+//             if (codec && codec->id == AV_CODEC_ID_PCM_MULAW) {
+//                 break;
+//             }
+//             codec = getCodec({AV_CODEC_ID_PCM_MULAW});
+//             break;
+//         case CodecOpus:
+//             if (codec && codec->id == AV_CODEC_ID_OPUS) {
+//                 break;
+//             }
+//             codec = getCodec({AV_CODEC_ID_OPUS});
+//             break;
+//         case CodecJPEG:
+//             if (codec && codec->id == AV_CODEC_ID_MJPEG) {
+//                 break;
+//             }
+//             codec = getCodec({AV_CODEC_ID_MJPEG});
+//             break;
+//         case CodecVP8:
+//             if (codec && codec->id == AV_CODEC_ID_VP8) {
+//                 break;
+//             }
+//             codec = getCodec({AV_CODEC_ID_VP8});
+//             break;
+//         case CodecVP9:
+//             if (codec && codec->id == AV_CODEC_ID_VP9) {
+//                 break;
+//             }
+//             codec = getCodec({AV_CODEC_ID_VP9});
+//             break;
+//         default: codec = nullptr; break;
+//     }
+
+//     codec = codec ? codec : codec_default;
+//     if (!codec) {
+//         throw std::runtime_error("未找到编码器");
+//     }
+
+//     _context.reset(avcodec_alloc_context3(codec), [](AVCodecContext *ctx) {
+//         avcodec_free_context(&ctx);
+//     });
+
+//     if (!_context) {
+//         throw std::runtime_error("创建编码器失败");
+//     }
+
+//     _context->bit_rate = track->getBitrate();
+//     _context->time_base = track->getTimeBase();
+//     if (track->getTrackType() == TrackVideo) {
+//         _context->width = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
+//         _context->height = static_pointer_cast<VideoTrack>(track)->getVideoHeight();
+//         _context->gop_size = 10;
+//         _context->max_b_frames = 1;
+//         _context->pix_fmt = AV_PIX_FMT_YUV420P;
+//     } else if (track->getTrackType() == TrackAudio) {
+//         AudioTrack::Ptr audio = static_pointer_cast<AudioTrack>(track);
+//         _context->sample_rate = audio->getAudioSampleRate();
+//         _context->channel_layout = av_get_default_channel_layout(audio->getAudioChannel());
+//         _context->channels = audio->getAudioChannel();
+//         _context->sample_fmt = AV_SAMPLE_FMT_FLTP;
+//     }
+
+//     AVDictionary *dict = nullptr;
+//     if (thread_num <= 0) {
+//         av_dict_set(&dict, "threads", "auto", 0);
+//     } else {
+//         av_dict_set(&dict, "threads", to_string(MIN((unsigned int)thread_num, thread::hardware_concurrency())).data(), 0);
+//     }
+//     av_dict_set(&dict, "preset", "fast", 0);
+//     av_dict_set(&dict, "tune", "zerolatency", 0);
+
+//     int ret = avcodec_open2(_context.get(), codec, &dict);
+//     av_dict_free(&dict);
+//     if (ret < 0) {
+//         throw std::runtime_error(StrPrinter << "打开编码器" << codec->name << "失败:" << ffmpeg_err(ret));
+//     }
+
+//     InfoL << "打开编码器成功:" << codec->name;
+// }
+
+// FFmpegEncoder::~FFmpegEncoder() {
+//     stopThread(true);
+//     flush();
+// }
+
+// void FFmpegEncoder::flush() {
+//     while (true) {
+//         auto packet = alloc_av_packet();
+//         int ret = avcodec_send_frame(_context.get(), nullptr);
+//         if (ret < 0) {
+//             WarnL << "avcodec_send_frame failed:" << ffmpeg_err(ret);
+//             break;
+//         }
+
+//         ret = avcodec_receive_packet(_context.get(), packet.get());
+//         if (ret == AVERROR(EAGAIN)) {
+//             continue;
+//         }
+//         if (ret == AVERROR_EOF) {
+//             break;
+//         }
+//         if (ret < 0) {
+//             WarnL << "avcodec_receive_packet failed:" << ffmpeg_err(ret);
+//             break;
+//         }
+
+//         auto frame = std::make_shared<Frame>();
+//         frame->setData(packet->data, packet->size);
+//         frame->setDts(packet->dts);
+//         frame->setPts(packet->pts);
+//         onEncode(frame);
+//     }
+// }
+
+// const AVCodecContext *FFmpegEncoder::getContext() const {
+//     return _context.get();
+// }
+
+// bool FFmpegEncoder::inputFrame(const Frame::Ptr &frame, bool live, bool async) {
+//     if (async && !TaskManager::isEnabled() && getContext()->codec_type == AVMEDIA_TYPE_VIDEO) {
+//         startThread("encoder thread");
+//     }
+
+//     if (!async || !TaskManager::isEnabled()) {
+//         return encodeFrame(frame->data(), frame->size(), frame->dts(), frame->pts(), live, frame->keyFrame());
+//     }
+
+//     auto frame_cache = Frame::getCacheAbleFrame(frame);
+//     return addEncodeTask(frame->keyFrame(), [this, live, frame_cache]() {
+//         encodeFrame(frame_cache->data(), frame_cache->size(), frame_cache->dts(), frame_cache->pts(), live, frame_cache->keyFrame());
+//     });
+// }
+
+// bool FFmpegEncoder::encodeFrame(const char *data, size_t size, uint64_t dts, uint64_t pts, bool live, bool key_frame) {
+//     TimeTicker2(30, TraceL);
+
+//     auto frame = alloc_av_frame();
+//     frame->pts = pts;
+//     frame->dts = dts;
+//     if (key_frame) {
+//         frame->pict_type = AV_PICTURE_TYPE_I;
+//     }
+
+//     if (getContext()->codec_type == AVMEDIA_TYPE_VIDEO) {
+//         frame->format = getContext()->pix_fmt;
+//         frame->width = getContext()->width;
+//         frame->height = getContext()->height;
+//         av_image_fill_arrays(frame->data, frame->linesize, (uint8_t*)data, (AVPixelFormat)frame->format, frame->width, frame->height, 1);
+//     } else if (getContext()->codec_type == AVMEDIA_TYPE_AUDIO) {
+//         frame->format = getContext()->sample_fmt;
+//         frame->nb_samples = size / av_get_bytes_per_sample((AVSampleFormat)frame->format) / getContext()->channels;
+//         av_image_fill_arrays(frame->data, frame->linesize, (uint8_t*)data, (AVPixelFormat)frame->format, getContext()->channels, frame->nb_samples, 1);
+//     }
+
+//     int ret = avcodec_send_frame(_context.get(), frame.get());
+//     if (ret < 0) {
+//         WarnL << "avcodec_send_frame failed:" << ffmpeg_err(ret);
+//         return false;
+//     }
+
+//     while (true) {
+//         auto packet = alloc_av_packet();
+//         ret = avcodec_receive_packet(_context.get(), packet.get());
+//         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+//             break;
+//         }
+//         if (ret < 0) {
+//             WarnL << "avcodec_receive_packet failed:" << ffmpeg_err(ret);
+//             break;
+//         }
+
+//         auto encoded_frame = std::make_shared<Frame>();
+//         encoded_frame->setData(packet->data, packet->size);
+//         encoded_frame->setDts(packet->dts);
+//         encoded_frame->setPts(packet->pts);
+//         onEncode(encoded_frame);
+//     }
+//     return true;
+// }
+
+// void FFmpegEncoder::setOnEncode(FFmpegEncoder::onEnc cb) {
+//     _cb = std::move(cb);
+// }
+
+// void FFmpegEncoder::onEncode(const Frame::Ptr &frame) {
+//     if (_cb) {
+//         _cb(frame);
+//     }
+// }
+
+FFmpegWatermark::FFmpegWatermark(const std::string &watermark_text) 
+    : watermark_text_(watermark_text) {
+    avfilter_register_all();
+}
+
+FFmpegWatermark::~FFmpegWatermark() {
+    if (buffersink_ctx) avfilter_free(buffersink_ctx);
+    if (buffersrc_ctx) avfilter_free(buffersrc_ctx);
+    if (filter_graph) avfilter_graph_free(&filter_graph);
+    if ( avio_ctx_ )avio_close(avio_ctx_);
+}
+
+bool FFmpegWatermark::init(const AVCodecContext *codec_ctx) {
+    const AVFilter *buffersrc = avfilter_get_by_name("buffer");
+    const AVFilter *buffersink = avfilter_get_by_name("buffersink");
+    AVFilterInOut *inputs = avfilter_inout_alloc();
+    AVFilterInOut *outputs = avfilter_inout_alloc();
+    filter_graph = avfilter_graph_alloc();
+    std::string filter_desc = "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf:text=" + watermark_text_ +
+                              ":x=(w-tw):y=(2*lh):fontsize=24:fontcolor=red";
+    int ret = 0;
+    if (!inputs || !outputs || !filter_graph) {
+        std::cerr << "Could not allocate filter graph resources" << std::endl;
+        ret = AVERROR(ENOMEM);
+        goto end;
+    }
+
+    char args[512];
+    snprintf(args, sizeof(args),
+             "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+             codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
+             codec_ctx->time_base.num, codec_ctx->time_base.den,
+             codec_ctx->sample_aspect_ratio.num, codec_ctx->sample_aspect_ratio.den);
+    std::cerr << "Buffer source args: " << args << std::endl;
+
+    if (avfilter_graph_create_filter(&buffersrc_ctx, buffersrc, "in", args, nullptr, filter_graph) < 0) {
+        std::cerr << "Could not create buffer source" << std::endl;
+        goto end;
+    }
+
+    if (avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out", nullptr, nullptr, filter_graph) < 0) {
+        std::cerr << "Could not create buffer sink" << std::endl;
+        goto end;;
+    }
+    /* Endpoints for the filter graph. */
+    outputs->name       = av_strdup("in");
+    outputs->filter_ctx = buffersrc_ctx;
+    outputs->pad_idx    = 0;
+    outputs->next       = NULL;
+ 
+    inputs->name       = av_strdup("out");
+    inputs->filter_ctx = buffersink_ctx;
+    inputs->pad_idx    = 0;
+    inputs->next       = NULL;   
+
+    if (ret = avfilter_graph_parse_ptr(filter_graph, filter_desc.c_str(), &inputs, &outputs, nullptr) < 0) {
+        std::cerr << "Could not parse filter graph" << std::endl;
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        fprintf(stderr, "Error in avfilter_graph_parse_ptr: %s\n", errbuf);
+        goto end;
+    }
+
+    if (ret = avfilter_graph_config(filter_graph, nullptr) < 0) {
+        char errbuf[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        fprintf(stderr, "Error in avfilter_graph_config: %s\n", errbuf);
+        std::cerr << "Could not configure filter graph" << std::endl;
+        goto end;
+    }
+    // avfilter_inout_free(&inputs);
+    // avfilter_inout_free(&outputs);
+    return true;
+end:
+    avfilter_inout_free(&inputs);
+    avfilter_inout_free(&outputs);
+
+    return false;
+}
+
+bool FFmpegWatermark::addWatermark( AVFrame *frame, AVFrame *output_frame) {
+    if (av_buffersrc_add_frame(buffersrc_ctx, frame) < 0) {
+        std::cerr << "Error while feeding frame to filter graph" << std::endl;
+        return false;
+    }
+
+    if (av_buffersink_get_frame(buffersink_ctx, output_frame) < 0) {
+        std::cerr << "Error while getting frame from filter graph" << std::endl;
+        return false;
+    }
+    save_avframe_to_yuv(output_frame);
+    return true;
+}
+void FFmpegWatermark::save_avframe_to_yuv(AVFrame *frame) {
+    if (!frame) {
+        fprintf(stderr, "Invalid frame or directory.\n");
+        return;
+    }
+    if(frame->width <= 0 || frame->height <= 0){
+        fprintf(stderr, "Invalid frame or directory.\n");
+        return;
+    }
+    if (avio_ctx_ == nullptr){
+         std::string current_file = "/home/lym_work/ZLMediaKit/release/linux/Debug/www/record";
+        //    std::string current_file = File::absolutePath(abFile,nullptr,true);
+            // 获取时间并生成文件名
+            char filename[256];
+            time_t now = time(NULL);
+            struct tm *t = localtime(&now);
+            snprintf(
+                filename, sizeof(filename),
+                "%s/frame_%dx%d_%s_%04d%02d%02d%02d%02d%02d.yuv",
+                current_file.c_str(),                // 确保使用 c_str()
+                frame->width, frame->height,
+                av_get_pix_fmt_name((AVPixelFormat)frame->format),
+                t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+                t->tm_hour, t->tm_min, t->tm_sec
+            );
+            std::cerr << "save_avframe_to_yuv filename: " << filename << std::endl;
+            // 使用 FFmpeg 的写入工具打开文件
+            if (avio_open(&avio_ctx_, filename, AVIO_FLAG_WRITE) < 0) {
+                fprintf(stderr, "Failed to open file: %s\n", filename);
+                return;
+            }
+
+    }
+   
+
+    // 写入 YUV 数据，根据具体像素格式处理
+    switch (frame->format) {
+        case AV_PIX_FMT_YUV420P:
+            for (int i = 0; i < frame->height; ++i) {
+                avio_write(avio_ctx_, frame->data[0] + i * frame->linesize[0], frame->width); // Y 平面
+            }
+            for (int i = 0; i < frame->height / 2; ++i) {
+                avio_write(avio_ctx_, frame->data[1] + i * frame->linesize[1], frame->width / 2); // U 平面
+            }
+            for (int i = 0; i < frame->height / 2; ++i) {
+                avio_write(avio_ctx_, frame->data[2] + i * frame->linesize[2], frame->width / 2); // V 平面
+            }
+            break;
+        case AV_PIX_FMT_NV12:
+        case AV_PIX_FMT_NV21: {
+            for (int i = 0; i < frame->height; ++i) {
+                avio_write(avio_ctx_, frame->data[0] + i * frame->linesize[0], frame->width); // Y 平面
+            }
+            int chroma_height = frame->height / 2;
+            int chroma_width = frame->width;
+            for (int i = 0; i < chroma_height; ++i) {
+                avio_write(avio_ctx_, frame->data[1] + i * frame->linesize[1], chroma_width); // UV 平面（交错存储）
+            }
+            break;
+        }
+        // 如果需要支持其他格式，可在此添加更多 case
+        default:
+            fprintf(stderr, "Unsupported pixel format: %s\n", av_get_pix_fmt_name((AVPixelFormat)frame->format));
+            avio_close(avio_ctx_);
+            return;
+    }
+    // printf("Frame saved to %s\n", filename);
 }
 
 } //namespace mediakit

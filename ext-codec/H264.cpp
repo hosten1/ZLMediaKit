@@ -17,7 +17,7 @@
 #include "Common/Parser.h"
 #include "Common/config.h"
 #include "Extension/Factory.h"
-
+#include <future> // 引入异步支持
 #ifdef ENABLE_MP4
 #include "mpeg4-avc.h"
 #endif
@@ -124,10 +124,16 @@ size_t prefixSize(const char *ptr, size_t len) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-H264Track::H264Track(const string &sps, const string &pps, int sps_prefix_len, int pps_prefix_len) {
+H264Track::H264Track(const std::string &sps, const std::string &pps, int sps_prefix_len, int pps_prefix_len) {
     _sps = sps.substr(sps_prefix_len);
     _pps = pps.substr(pps_prefix_len);
     H264Track::update();
+}
+H264Track::~H264Track() {
+    // std::lock_guard<std::mutex> lock(_mutex);
+    if (_decoder) {
+        _decoder.reset();
+    }
 }
 
 CodecId H264Track::getCodecId() const {
@@ -301,6 +307,62 @@ bool H264Track::inputFrame_l(const Frame::Ptr &frame) {
     if (_width == 0 && ready()) {
         update();
     }
+    if (_decoder == nullptr) {
+        try {
+             // 获取当前对象的 shared_ptr
+                auto self = shared_from_this();
+                _decoder = std::make_shared<FFmpegDecoder>(self, 1);
+                _decoder->setOnDecode([=](const AVFrame * frame) {
+                         AVFrame *modifiable_frame = av_frame_clone(frame);
+                        if (!modifiable_frame) {
+                            fprintf(stderr, "Failed to clone frame.\n");
+                            return ;
+                        }
+                         if (_watermark == nullptr)
+                         {
+                             _watermark = std::make_shared<FFmpegWatermark>("SampleWatermark");
+                            if (!_watermark->init(_decoder->getContext())) {
+                            std::cerr << "Failed to initialize watermark filter" << std::endl;
+                            return ;
+                            }
+                         }
+                       
+                        AVFrame *output_frame = av_frame_alloc();
+                        if (_watermark->addWatermark(modifiable_frame, output_frame)) {
+                            std::cout << "Watermark added successfully" << std::endl;
+                        } else {
+                            std::cerr << "Failed to add watermark" << std::endl;
+                        }
+                       
+                    std::cout << "Decoded frame callback triggered frame->width="<< modifiable_frame->width 
+                                                                << " frame->height="<< modifiable_frame->height
+                                                                << std::endl;
+                     av_frame_free(&output_frame);
+                     av_frame_free(&modifiable_frame);
+                });
+               
+            // auto self = shared_from_this(); // 从当前对象获取 std::shared_ptr
+            // auto future = std::async(std::launch::async, [this, self]() {
+              
+            //     return _decoder;
+            // });
+
+            // // 等待解码器完成初始化
+            // future.get();
+
+        } catch (const std::runtime_error &e) {
+            std::cerr << "捕获到异常: " << e.what() << std::endl;
+        }
+
+        WarnL << "H264Track Decoded init success";
+    }
+    // 调用 FFmpegDecoder 尝试解码
+            if (_decoder) {
+                bool decoded = _decoder->inputFrame(frame, true, false);
+                if (!decoded) {
+                    WarnL << "Failed to decode frame, PTS=" << frame->pts();
+                }
+            }
     return ret;
 }
 

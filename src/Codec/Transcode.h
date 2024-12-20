@@ -26,11 +26,23 @@ extern "C" {
 #include "libswresample/swresample.h"
 #include "libavutil/audio_fifo.h"
 #include "libavutil/imgutils.h"
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
+#include <libavutil/opt.h>
+#include <libavformat/avformat.h>
 #ifdef __cplusplus
 }
 #endif
 
+#include <cstdio>
+#include <ctime>
+#include <sys/stat.h>
+// #include <sys/types>
+
 namespace mediakit {
+
+class FFmpegWatermark;
 
 class FFmpegFrame {
 public:
@@ -99,17 +111,21 @@ class FFmpegDecoder : public TaskManager {
 public:
     using Ptr = std::shared_ptr<FFmpegDecoder>;
     using onDec = std::function<void(const FFmpegFrame::Ptr &)>;
+    using onDecAvframe = std::function<void(const AVFrame *)>;
+
 
     FFmpegDecoder(const Track::Ptr &track, int thread_num = 2, const std::vector<std::string> &codec_name = {});
     ~FFmpegDecoder() override;
 
     bool inputFrame(const Frame::Ptr &frame, bool live, bool async, bool enable_merge = true);
     void setOnDecode(onDec cb);
+    void setOnDecode(onDecAvframe cb);
     void flush();
     const AVCodecContext *getContext() const;
-
+    const AVCodecContext *getDecoderContext()const;
 private:
     void onDecode(const FFmpegFrame::Ptr &frame);
+    void onDecode(const AVFrame *frame);
     bool inputFrame_l(const Frame::Ptr &frame, bool live, bool enable_merge);
     bool decodeFrame(const char *data, size_t size, uint64_t dts, uint64_t pts, bool live, bool key_frame);
 
@@ -118,8 +134,11 @@ private:
     bool _do_merger = true;
     toolkit::Ticker _ticker;
     onDec _cb;
-    std::shared_ptr<AVCodecContext> _context;
+    onDecAvframe _cb_avframe;
+    // std::shared_ptr<AVCodecContext> _context;
+    std::shared_ptr<AVCodecContext> _decoder_context;
     FrameMerger _merger{FrameMerger::h264_prefix};
+    std::shared_ptr<FFmpegWatermark> _watermark;
 };
 
 class FFmpegSws {
@@ -143,6 +162,50 @@ private:
     AVPixelFormat _src_format = AV_PIX_FMT_NONE;
     AVPixelFormat _target_format = AV_PIX_FMT_NONE;
 };
+class FFmpegWatermark {
+public:
+    using Ptr = std::shared_ptr<FFmpegWatermark>;
+    explicit FFmpegWatermark(const std::string &watermark_text);
+    ~FFmpegWatermark();
+
+    // 初始化滤镜图
+    bool init(const AVCodecContext *codec_ctx);
+
+    // 为帧添加水印
+    bool addWatermark( AVFrame *frame, AVFrame *output_frame);
+
+
+    void save_avframe_to_yuv(AVFrame *frame);
+
+private:
+    std::string watermark_text_;
+    AVFilterContext *buffersrc_ctx = nullptr;
+    AVFilterContext *buffersink_ctx = nullptr;
+    AVFilterGraph *filter_graph = nullptr;
+    AVIOContext * avio_ctx_ = nullptr;
+};//// class FFmpegWatermark end
+// class FFmpegEncoder : public TaskManager {
+// public:
+//     using Ptr = std::shared_ptr<FFmpegEncoder>;
+//     using onEnc = std::function<void(const Frame::Ptr &)>;
+
+//     FFmpegEncoder(const Track::Ptr &track, int thread_num = 2, const std::vector<std::string> &codec_name = {});
+//     ~FFmpegEncoder() override;
+
+//     bool inputFrame(const Frame::Ptr &frame, bool live, bool async);
+//     void setOnEncode(onEnc cb);
+//     void flush();
+//     const AVCodecContext *getContext() const;
+
+// private:
+//     void onEncode(const Frame::Ptr &frame);
+//     bool encodeFrame(const char *data, size_t size, uint64_t dts, uint64_t pts, bool live, bool key_frame);
+
+// private:
+//     toolkit::Ticker _ticker;
+//     onEnc _cb;
+//     std::shared_ptr<AVCodecContext> _context;
+// };// class FFmpegEncoder end
 
 }//namespace mediakit
 #endif// ENABLE_FFMPEG

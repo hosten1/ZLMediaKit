@@ -38,7 +38,7 @@ option(ENABLE_API_STATIC_LIB "Enable mk_api static lib" OFF)
 option(ENABLE_ASAN "Enable Address Sanitize" OFF)
 option(ENABLE_CXX_API "Enable C++ API SDK" OFF)
 option(ENABLE_FAAC "Enable FAAC" OFF)
-option(ENABLE_FFMPEG "Enable FFmpeg" OFF)
+option(ENABLE_FFMPEG "Enable FFmpeg" ON)
 option(ENABLE_HLS "Enable HLS" ON)
 option(ENABLE_JEMALLOC_STATIC "Enable static linking to the jemalloc library" OFF)
 option(ENABLE_JEMALLOC_DUMP "Enable jemalloc to dump malloc statistics" OFF)
@@ -55,9 +55,9 @@ option(ENABLE_SRT "Enable SRT" ON)
 option(ENABLE_TESTS "Enable Tests" ON)
 option(ENABLE_SCTP "Enable SCTP" ON)
 option(ENABLE_WEBRTC "Enable WebRTC" ON)
-option(ENABLE_X264 "Enable x264" OFF)
+option(ENABLE_X264 "Enable x264" ON)
 option(ENABLE_WEPOLL "Enable wepoll" ON)
-option(ENABLE_VIDEOSTACK "Enable video stack" OFF)
+option(ENABLE_VIDEOSTACK "Enable video stack" ON)
 option(DISABLE_REPORT "Disable report to report.zlmediakit.com" OFF)
 option(USE_SOLUTION_FOLDERS "Enable solution dir supported" ON)
 ##############################################################################
@@ -246,7 +246,10 @@ endif()
 
 # 多个模块依赖 ffmpeg 相关库, 统一查找
 # Multiple modules depend on ffmpeg related libraries, unified search
+message(STATUS "s是否开启ffmpeg 查找相关库 ENABLE_FFMPEG: ${ENABLE_FFMPEG}")
 if(ENABLE_FFMPEG)
+  add_definitions(-DENABLE_FFMPEG)
+  message(STATUS "开启ffmpeg 查找相关库 ENABLE_FFMPEG: ${ENABLE_FFMPEG}")
   find_package(PkgConfig QUIET)
   # 查找 ffmpeg/libutil 是否安装
   # find ffmpeg/libutil installed
@@ -285,6 +288,25 @@ if(ENABLE_FFMPEG)
     if(SWRESAMPLE_FOUND)
       update_cached_list(MK_LINK_LIBRARIES PkgConfig::SWRESAMPLE)
       message(STATUS "found library: ${SWRESAMPLE_LIBRARIES}")
+    endif()
+  endif()
+
+  # lym 查找 ffmpeg/libavfilter 是否安装
+  # find ffmpeg/libavfilter installed
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(AVFILTER QUIET IMPORTED_TARGET libavfilter)
+    if(AVFILTER_FOUND)
+      update_cached_list(MK_LINK_LIBRARIES PkgConfig::AVFILTER)
+      message(STATUS "found library: ${AVFILTER_LIBRARIES}")
+    endif()
+  endif()
+  # lym 查找 ffmpeg/libavformat 是否安装
+  # find ffmpeg/libavformat installed
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(AVFORMAT QUIET IMPORTED_TARGET libavformat)
+    if(AVFORMAT_FOUND)
+      update_cached_list(MK_LINK_LIBRARIES PkgConfig::AVFORMAT)
+      message(STATUS "found library: ${AVFORMAT_LIBRARIES}")
     endif()
   endif()
 
@@ -329,6 +351,27 @@ if(ENABLE_FFMPEG)
       include_directories(SYSTEM ${SWRESAMPLE_INCLUDE_DIRS})
       update_cached_list(MK_LINK_LIBRARIES ${SWRESAMPLE_LIBRARIES})
       message(STATUS "found library: ${SWRESAMPLE_LIBRARIES}")
+    endif()
+  endif()
+
+  # 查找 lym ffmpeg/libavfilter 是否安装
+  # find ffmpeg/libavfilter. installed
+  if(NOT AVFILTER_FOUND)
+    find_package(AVFILTER QUIET)
+    if(AVFILTER_FOUND)
+      include_directories(SYSTEM ${AVFILTER_INCLUDE_DIRS})
+      update_cached_list(MK_LINK_LIBRARIES ${AVFILTER_LIBRARIES})
+      message(STATUS "found library: ${AVFILTER_LIBRARIES}")
+    endif()
+  endif()
+  # lym 查找 ffmpeg/libavformat 是否安装
+  # find ffmpeg/libavformat installed
+  if(NOT AVFORMAT_FOUND)
+    find_package(AVFORMAT QUIET)
+    if(AVFORMAT_FOUND)
+      include_directories(SYSTEM ${AVFORMAT_INCLUDE_DIRS})
+      update_cached_list(MK_LINK_LIBRARIES ${AVFORMAT_LIBRARIES})
+      message(STATUS "found library: ${AVFORMAT_LIBRARIES}")
     endif()
   endif()
 

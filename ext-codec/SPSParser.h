@@ -15,6 +15,16 @@
 #define T_PROFILE_HEVC_REXT                        4
 
 
+#ifdef ENABLE_FFMPEG
+
+#include "libavutil/pixfmt.h"
+
+// typedef AVColorPrimaries T_AVColorPrimaries;
+// typedef AVColorTransferCharacteristic T_AVColorTransferCharacteristic;
+// typedef AVColorSpace T_AVColorSpace;
+
+#else
+
 
 /**
   * Chromaticity coordinates of the source primaries.
@@ -75,7 +85,7 @@ enum T_AVColorSpace {
     AVCOL_SPC_NB,               ///< Not part of ABI
 };
 
-
+#endif // !0
 enum {
     // 7.4.3.1: vps_max_layers_minus1 is in [0, 62].
     HEVC_MAX_LAYERS     = 63,
@@ -187,9 +197,15 @@ typedef struct T_SPS {
     int iVideoSignalTypePresentFlag;
     int iFullRange;
     int iColourDescriptionPresentFlag;
+    #ifdef ENABLE_FFMPEG
+    enum AVColorPrimaries tColorPrimaries;
+    enum AVColorTransferCharacteristic tColorTrc;
+    enum AVColorSpace tColorspace;
+    #else
     enum T_AVColorPrimaries tColorPrimaries;
     enum T_AVColorTransferCharacteristic tColorTrc;
     enum T_AVColorSpace tColorspace;
+    #endif
     int iTimingInfoPresentFlag;
     uint32_t u32NumUnitsInTick;
     uint32_t u32TimeScale;
