@@ -184,28 +184,33 @@ private:
     AVFilterGraph *filter_graph = nullptr;
     AVIOContext * avio_ctx_ = nullptr;
 };//// class FFmpegWatermark end
-// class FFmpegEncoder : public TaskManager {
-// public:
-//     using Ptr = std::shared_ptr<FFmpegEncoder>;
-//     using onEnc = std::function<void(const Frame::Ptr &)>;
 
-//     FFmpegEncoder(const Track::Ptr &track, int thread_num = 2, const std::vector<std::string> &codec_name = {});
-//     ~FFmpegEncoder() override;
+class FFmpegEncoder : public TaskManager {
+public:
+    using Ptr = std::shared_ptr<FFmpegEncoder>;
+    using onEncAvframe = std::function<void(const AVPacket *)>;
 
-//     bool inputFrame(const Frame::Ptr &frame, bool live, bool async);
-//     void setOnEncode(onEnc cb);
-//     void flush();
-//     const AVCodecContext *getContext() const;
 
-// private:
-//     void onEncode(const Frame::Ptr &frame);
-//     bool encodeFrame(const char *data, size_t size, uint64_t dts, uint64_t pts, bool live, bool key_frame);
+    FFmpegEncoder(const Track::Ptr &track, int thread_num = 2, const std::vector<std::string> &codec_name = {});
+    ~FFmpegEncoder() override;
 
-// private:
-//     toolkit::Ticker _ticker;
-//     onEnc _cb;
-//     std::shared_ptr<AVCodecContext> _context;
-// };// class FFmpegEncoder end
+    bool inputFrame(const AVFrame *frame, bool live, bool async, bool enable_merge = true);
+    void setOnEncode(onEncAvframe cb);
+    void flush();
+    const AVCodecContext *getEncodeContext()const;
+private:
+    void onEncode(const AVPacket *packet);
+    bool inputFrame_l(const AVFrame *frame, bool live, bool enable_merge);
+    bool decodeFrame(const AVFrame *frame, uint64_t dts, uint64_t pts, bool live, bool key_frame);
+
+private:
+    // default merge frame
+    bool _do_merger = true;
+    toolkit::Ticker _ticker;
+    onEncAvframe _cb;
+    std::shared_ptr<AVCodecContext> _encoder_context;
+    FrameMerger _merger{FrameMerger::h264_prefix};
+};
 
 }//namespace mediakit
 #endif// ENABLE_FFMPEG

@@ -723,229 +723,6 @@ FFmpegFrame::Ptr FFmpegSws::inputFrame(const FFmpegFrame::Ptr &frame, int &ret, 
     return nullptr;
 }
 
-// FFmpegEncoder::FFmpegEncoder(const Track::Ptr &track, int thread_num, const std::vector<std::string> &codec_name) {
-//     setupFFmpeg();
-//     const AVCodec *codec = nullptr;
-//     const AVCodec *codec_default = nullptr;
-//     if (!codec_name.empty()) {
-//         codec = getCodecByName(codec_name);
-//     }
-//     switch (track->getCodecId()) {
-//         case CodecH264:
-//             codec_default = getCodec({AV_CODEC_ID_H264});
-//             if (codec && codec->id == AV_CODEC_ID_H264) {
-//                 break;
-//             }
-//             codec = getCodec({"libx264"});
-//             break;
-//         case CodecH265:
-//             codec_default = getCodec({AV_CODEC_ID_HEVC});
-//             if (codec && codec->id == AV_CODEC_ID_HEVC) {
-//                 break;
-//             }
-//             codec = getCodec({"libx265"});
-//             break;
-//         case CodecAAC:
-//             if (codec && codec->id == AV_CODEC_ID_AAC) {
-//                 break;
-//             }
-//             codec = getCodec({AV_CODEC_ID_AAC});
-//             break;
-//         case CodecG711A:
-//             if (codec && codec->id == AV_CODEC_ID_PCM_ALAW) {
-//                 break;
-//             }
-//             codec = getCodec({AV_CODEC_ID_PCM_ALAW});
-//             break;
-//         case CodecG711U:
-//             if (codec && codec->id == AV_CODEC_ID_PCM_MULAW) {
-//                 break;
-//             }
-//             codec = getCodec({AV_CODEC_ID_PCM_MULAW});
-//             break;
-//         case CodecOpus:
-//             if (codec && codec->id == AV_CODEC_ID_OPUS) {
-//                 break;
-//             }
-//             codec = getCodec({AV_CODEC_ID_OPUS});
-//             break;
-//         case CodecJPEG:
-//             if (codec && codec->id == AV_CODEC_ID_MJPEG) {
-//                 break;
-//             }
-//             codec = getCodec({AV_CODEC_ID_MJPEG});
-//             break;
-//         case CodecVP8:
-//             if (codec && codec->id == AV_CODEC_ID_VP8) {
-//                 break;
-//             }
-//             codec = getCodec({AV_CODEC_ID_VP8});
-//             break;
-//         case CodecVP9:
-//             if (codec && codec->id == AV_CODEC_ID_VP9) {
-//                 break;
-//             }
-//             codec = getCodec({AV_CODEC_ID_VP9});
-//             break;
-//         default: codec = nullptr; break;
-//     }
-
-//     codec = codec ? codec : codec_default;
-//     if (!codec) {
-//         throw std::runtime_error("未找到编码器");
-//     }
-
-//     _context.reset(avcodec_alloc_context3(codec), [](AVCodecContext *ctx) {
-//         avcodec_free_context(&ctx);
-//     });
-
-//     if (!_context) {
-//         throw std::runtime_error("创建编码器失败");
-//     }
-
-//     _context->bit_rate = track->getBitrate();
-//     _context->time_base = track->getTimeBase();
-//     if (track->getTrackType() == TrackVideo) {
-//         _context->width = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
-//         _context->height = static_pointer_cast<VideoTrack>(track)->getVideoHeight();
-//         _context->gop_size = 10;
-//         _context->max_b_frames = 1;
-//         _context->pix_fmt = AV_PIX_FMT_YUV420P;
-//     } else if (track->getTrackType() == TrackAudio) {
-//         AudioTrack::Ptr audio = static_pointer_cast<AudioTrack>(track);
-//         _context->sample_rate = audio->getAudioSampleRate();
-//         _context->channel_layout = av_get_default_channel_layout(audio->getAudioChannel());
-//         _context->channels = audio->getAudioChannel();
-//         _context->sample_fmt = AV_SAMPLE_FMT_FLTP;
-//     }
-
-//     AVDictionary *dict = nullptr;
-//     if (thread_num <= 0) {
-//         av_dict_set(&dict, "threads", "auto", 0);
-//     } else {
-//         av_dict_set(&dict, "threads", to_string(MIN((unsigned int)thread_num, thread::hardware_concurrency())).data(), 0);
-//     }
-//     av_dict_set(&dict, "preset", "fast", 0);
-//     av_dict_set(&dict, "tune", "zerolatency", 0);
-
-//     int ret = avcodec_open2(_context.get(), codec, &dict);
-//     av_dict_free(&dict);
-//     if (ret < 0) {
-//         throw std::runtime_error(StrPrinter << "打开编码器" << codec->name << "失败:" << ffmpeg_err(ret));
-//     }
-
-//     InfoL << "打开编码器成功:" << codec->name;
-// }
-
-// FFmpegEncoder::~FFmpegEncoder() {
-//     stopThread(true);
-//     flush();
-// }
-
-// void FFmpegEncoder::flush() {
-//     while (true) {
-//         auto packet = alloc_av_packet();
-//         int ret = avcodec_send_frame(_context.get(), nullptr);
-//         if (ret < 0) {
-//             WarnL << "avcodec_send_frame failed:" << ffmpeg_err(ret);
-//             break;
-//         }
-
-//         ret = avcodec_receive_packet(_context.get(), packet.get());
-//         if (ret == AVERROR(EAGAIN)) {
-//             continue;
-//         }
-//         if (ret == AVERROR_EOF) {
-//             break;
-//         }
-//         if (ret < 0) {
-//             WarnL << "avcodec_receive_packet failed:" << ffmpeg_err(ret);
-//             break;
-//         }
-
-//         auto frame = std::make_shared<Frame>();
-//         frame->setData(packet->data, packet->size);
-//         frame->setDts(packet->dts);
-//         frame->setPts(packet->pts);
-//         onEncode(frame);
-//     }
-// }
-
-// const AVCodecContext *FFmpegEncoder::getContext() const {
-//     return _context.get();
-// }
-
-// bool FFmpegEncoder::inputFrame(const Frame::Ptr &frame, bool live, bool async) {
-//     if (async && !TaskManager::isEnabled() && getContext()->codec_type == AVMEDIA_TYPE_VIDEO) {
-//         startThread("encoder thread");
-//     }
-
-//     if (!async || !TaskManager::isEnabled()) {
-//         return encodeFrame(frame->data(), frame->size(), frame->dts(), frame->pts(), live, frame->keyFrame());
-//     }
-
-//     auto frame_cache = Frame::getCacheAbleFrame(frame);
-//     return addEncodeTask(frame->keyFrame(), [this, live, frame_cache]() {
-//         encodeFrame(frame_cache->data(), frame_cache->size(), frame_cache->dts(), frame_cache->pts(), live, frame_cache->keyFrame());
-//     });
-// }
-
-// bool FFmpegEncoder::encodeFrame(const char *data, size_t size, uint64_t dts, uint64_t pts, bool live, bool key_frame) {
-//     TimeTicker2(30, TraceL);
-
-//     auto frame = alloc_av_frame();
-//     frame->pts = pts;
-//     frame->dts = dts;
-//     if (key_frame) {
-//         frame->pict_type = AV_PICTURE_TYPE_I;
-//     }
-
-//     if (getContext()->codec_type == AVMEDIA_TYPE_VIDEO) {
-//         frame->format = getContext()->pix_fmt;
-//         frame->width = getContext()->width;
-//         frame->height = getContext()->height;
-//         av_image_fill_arrays(frame->data, frame->linesize, (uint8_t*)data, (AVPixelFormat)frame->format, frame->width, frame->height, 1);
-//     } else if (getContext()->codec_type == AVMEDIA_TYPE_AUDIO) {
-//         frame->format = getContext()->sample_fmt;
-//         frame->nb_samples = size / av_get_bytes_per_sample((AVSampleFormat)frame->format) / getContext()->channels;
-//         av_image_fill_arrays(frame->data, frame->linesize, (uint8_t*)data, (AVPixelFormat)frame->format, getContext()->channels, frame->nb_samples, 1);
-//     }
-
-//     int ret = avcodec_send_frame(_context.get(), frame.get());
-//     if (ret < 0) {
-//         WarnL << "avcodec_send_frame failed:" << ffmpeg_err(ret);
-//         return false;
-//     }
-
-//     while (true) {
-//         auto packet = alloc_av_packet();
-//         ret = avcodec_receive_packet(_context.get(), packet.get());
-//         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-//             break;
-//         }
-//         if (ret < 0) {
-//             WarnL << "avcodec_receive_packet failed:" << ffmpeg_err(ret);
-//             break;
-//         }
-
-//         auto encoded_frame = std::make_shared<Frame>();
-//         encoded_frame->setData(packet->data, packet->size);
-//         encoded_frame->setDts(packet->dts);
-//         encoded_frame->setPts(packet->pts);
-//         onEncode(encoded_frame);
-//     }
-//     return true;
-// }
-
-// void FFmpegEncoder::setOnEncode(FFmpegEncoder::onEnc cb) {
-//     _cb = std::move(cb);
-// }
-
-// void FFmpegEncoder::onEncode(const Frame::Ptr &frame) {
-//     if (_cb) {
-//         _cb(frame);
-//     }
-// }
 
 FFmpegWatermark::FFmpegWatermark(const std::string &watermark_text) 
     : watermark_text_(watermark_text) {
@@ -1108,6 +885,132 @@ void FFmpegWatermark::save_avframe_to_yuv(AVFrame *frame) {
     }
     // printf("Frame saved to %s\n", filename);
 }
+FFmpegEncoder::FFmpegEncoder(const Track::Ptr &track, int thread_num, const std::vector<std::string> &codec_name) {
+    setupFFmpeg();
 
+    // 创建编码器
+    const AVCodec *codec = nullptr;
+    for (const auto &name : codec_name) {
+        codec = avcodec_find_encoder_by_name(name.c_str());
+        if (codec) {
+            break;
+        }
+    }
+
+    if (!codec) {
+        throw std::runtime_error("Failed to find suitable encoder.");
+    }
+
+    _encoder_context.reset(avcodec_alloc_context3(codec), [](AVCodecContext *ctx) {
+        avcodec_free_context(&ctx);
+    });
+
+    if (!_encoder_context) {
+        throw std::runtime_error("Failed to allocate codec context.");
+    }
+
+    _encoder_context->thread_count = thread_num;
+
+    // 根据输入轨道设置编码器参数
+    _encoder_context->width = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
+    _encoder_context->height = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
+    _encoder_context->time_base = {1, (int)static_pointer_cast<VideoTrack>(track)->getVideoFps()};
+    _encoder_context->pix_fmt = AV_PIX_FMT_YUV420P;
+
+    if (avcodec_open2(_encoder_context.get(), codec, nullptr) < 0) {
+        throw std::runtime_error("Failed to open codec.");
+    }
+}
+
+FFmpegEncoder::~FFmpegEncoder() {
+    flush();
+}
+
+bool FFmpegEncoder::inputFrame(const AVFrame *frame, bool live, bool async, bool enable_merge) {
+     if (async && !TaskManager::isEnabled() && getEncodeContext()->codec_type == AVMEDIA_TYPE_VIDEO) {
+        // 开启异步编码，且为视频，尝试启动异步解码线程  [AUTO-TRANSLATED:17a68fc6]
+        // Enable asynchronous encoding, and it is video, try to start asynchronous decoding thread
+        startThread("decoder thread");
+    }
+
+    if (!async || !TaskManager::isEnabled()) {
+        return inputFrame_l(frame, live, enable_merge);
+    }
+
+    // auto frame_cache = Frame::getCacheAbleFrame(frame);
+    return addEncodeTask([this, live, frame, enable_merge]() {
+        inputFrame_l(frame, live, enable_merge);
+        // 此处模拟解码太慢导致的主动丢帧  [AUTO-TRANSLATED:fc8bea8a]
+        // Here simulates decoding too slow, resulting in active frame dropping
+        //usleep(100 * 1000);
+    });
+}
+
+bool FFmpegEncoder::inputFrame_l(const AVFrame *frame, bool live, bool enable_merge) {
+    if (!_encoder_context) {
+        WarnL << "Encoder context is not initialized.";
+        return false;
+    }
+
+    if (avcodec_send_frame(_encoder_context.get(), frame) < 0) {
+        WarnL << "Failed to send frame to encoder.";
+        return false;
+    }
+
+    AVPacket *packet = av_packet_alloc();
+    if (!packet) {
+        WarnL << "Failed to allocate AVPacket.";
+        return false;
+    }
+
+    int ret = 0;
+    while ((ret = avcodec_receive_packet(_encoder_context.get(), packet)) == 0) {
+        onEncode(packet);
+        av_packet_unref(packet);
+    }
+
+    av_packet_free(&packet);
+
+    if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+        WarnL << "Error during encoding: " << ret;
+        return false;
+    }
+
+    return true;
+}
+
+void FFmpegEncoder::setOnEncode(onEncAvframe cb) {
+    _cb = std::move(cb);
+}
+
+void FFmpegEncoder::onEncode(const AVPacket *packet) {
+    if (_cb) {
+        _cb(packet);
+    }
+}
+
+void FFmpegEncoder::flush() {
+    if (!_encoder_context) {
+        return;
+    }
+
+    avcodec_send_frame(_encoder_context.get(), nullptr);
+
+    AVPacket *packet = av_packet_alloc();
+    if (!packet) {
+        return;
+    }
+
+    while (avcodec_receive_packet(_encoder_context.get(), packet) == 0) {
+        onEncode(packet);
+        av_packet_unref(packet);
+    }
+
+    av_packet_free(&packet);
+}
+
+const AVCodecContext *FFmpegEncoder::getEncodeContext() const {
+    return _encoder_context.get();
+}
 } //namespace mediakit
 #endif//ENABLE_FFMPEG
