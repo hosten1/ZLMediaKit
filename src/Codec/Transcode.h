@@ -202,6 +202,8 @@ private:
     void onEncode(const AVPacket *packet);
     bool inputFrame_l(const AVFrame *frame, bool live, bool enable_merge);
     bool decodeFrame(const AVFrame *frame, uint64_t dts, uint64_t pts, bool live, bool key_frame);
+    void save_avpacket_to_h264(const AVPacket *packet);
+
 
 private:
     // default merge frame
@@ -209,6 +211,7 @@ private:
     toolkit::Ticker _ticker;
     onEncAvframe _cb;
     std::shared_ptr<AVCodecContext> _encoder_context;
+    AVIOContext * avio_ctx_ = nullptr;
     FrameMerger _merger{FrameMerger::h264_prefix};
 };
 

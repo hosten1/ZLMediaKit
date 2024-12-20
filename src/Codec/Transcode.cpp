@@ -1003,6 +1003,7 @@ void FFmpegEncoder::flush() {
 
     while (avcodec_receive_packet(_encoder_context.get(), packet) == 0) {
         onEncode(packet);
+        save_avpacket_to_h264(packet);
         av_packet_unref(packet);
     }
 
@@ -1011,6 +1012,57 @@ void FFmpegEncoder::flush() {
 
 const AVCodecContext *FFmpegEncoder::getEncodeContext() const {
     return _encoder_context.get();
+}
+
+void FFmpegEncoder::save_avpacket_to_h264(const AVPacket *packet) {
+    if (!packet || packet->size <= 0) {
+        fprintf(stderr, "Invalid packet or size.\n");
+        return;
+    }
+    // Create a copy of the AVPacket
+        AVPacket *packet_copy = av_packet_alloc();
+        if (!packet_copy) {
+            fprintf(stderr, "Failed to allocate AVPacket.\n");
+            return;
+        }
+
+        if (av_packet_ref(packet_copy, packet) < 0) {
+            fprintf(stderr, "Failed to copy AVPacket.\n");
+            av_packet_free(&packet_copy);
+            return;
+        }
+    if (avio_ctx_ == nullptr) {
+        std::string current_file = "/home/lym_work/ZLMediaKit/release/linux/Debug/www/record";
+
+        // Generate filename based on timestamp
+        char filename[256];
+        time_t now = time(NULL);
+        struct tm *t = localtime(&now);
+        snprintf(
+            filename, sizeof(filename),
+            "%s/encoded_%04d%02d%02d%02d%02d%02d.h264",
+            current_file.c_str(),
+            t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+            t->tm_hour, t->tm_min, t->tm_sec
+        );
+        
+        std::cerr << "save_avpacket_to_h264 filename: " << filename << std::endl;
+
+        // Open file for writing using FFmpeg's avio API
+        if (avio_open(&avio_ctx_, filename, AVIO_FLAG_WRITE) < 0) {
+            fprintf(stderr, "Failed to open file: %s\n", filename);
+            return;
+        }
+    }
+
+    // Write the H264 packet data
+    if (avio_ctx_) {
+        avio_write(avio_ctx_, packet_copy->data, packet_copy->size);
+    } else {
+        fprintf(stderr, "AVIO context is not initialized.\n");
+    }
+      // Free the copied packet
+    av_packet_free(&packet_copy);
 }
 } //namespace mediakit
 #endif//ENABLE_FFMPEG
