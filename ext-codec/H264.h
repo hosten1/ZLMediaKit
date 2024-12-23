@@ -146,6 +146,7 @@ private:
     Sdp::Ptr getSdp(uint8_t payload_type) const override;
     Track::Ptr clone() const override;
     bool inputFrame_l(const Frame::Ptr &frame);
+    bool inputFrame_l_water(const Frame::Ptr &frame);
     void insertConfigFrame(const Frame::Ptr &frame);
 
     bool latestIsConfigFrame();
@@ -159,6 +160,7 @@ private:
     std::string _sps;
     std::string _pps;
     FFmpegDecoder::Ptr _decoder;  // FFmpeg 解码器实例
+    FFmpegEncoder::Ptr _encoder;  // FFmpeg 编器实例
     FFmpegWatermark::Ptr _watermark;  // FFmpeg 水印
 };
 

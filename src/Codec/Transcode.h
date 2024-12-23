@@ -188,7 +188,7 @@ private:
 class FFmpegEncoder : public TaskManager {
 public:
     using Ptr = std::shared_ptr<FFmpegEncoder>;
-    using onEncAvframe = std::function<void(const AVPacket *)>;
+    using onEncAvframe = std::function<void(const AVPacket * pkt,CodecId codecId, TrackType trackType)>;
 
 
     FFmpegEncoder(const Track::Ptr &track, int thread_num = 2, const std::vector<std::string> &codec_name = {});
@@ -215,6 +215,10 @@ private:
     FrameMerger _merger{FrameMerger::h264_prefix};
 };
 
+Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, TrackType trackType);
+CodecId getCodecIdFromContext(const std::shared_ptr<AVCodecContext> _encoder_context);
+TrackType getTrackTypeFromContext(const std::shared_ptr<AVCodecContext> _encoder_context);
+CodecId convertCodecId(AVCodecID avCodecId);
 }//namespace mediakit
 #endif// ENABLE_FFMPEG
 #endif //ZLMEDIAKIT_TRANSCODE_H

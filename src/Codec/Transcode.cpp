@@ -805,6 +805,7 @@ end:
 }
 
 bool FFmpegWatermark::addWatermark( AVFrame *frame, AVFrame *output_frame) {
+    // std::cout << "addWatermark frame->width="<< frame->width  << " frame->height="<< frame->height << std::endl;
     if (av_buffersrc_add_frame(buffersrc_ctx, frame) < 0) {
         std::cerr << "Error while feeding frame to filter graph" << std::endl;
         return false;
@@ -814,7 +815,7 @@ bool FFmpegWatermark::addWatermark( AVFrame *frame, AVFrame *output_frame) {
         std::cerr << "Error while getting frame from filter graph" << std::endl;
         return false;
     }
-    save_avframe_to_yuv(output_frame);
+    // save_avframe_to_yuv(output_frame);
     return true;
 }
 void FFmpegWatermark::save_avframe_to_yuv(AVFrame *frame) {
@@ -888,15 +889,39 @@ void FFmpegWatermark::save_avframe_to_yuv(AVFrame *frame) {
 FFmpegEncoder::FFmpegEncoder(const Track::Ptr &track, int thread_num, const std::vector<std::string> &codec_name) {
     setupFFmpeg();
 
-    // 创建编码器
     const AVCodec *codec = nullptr;
-    for (const auto &name : codec_name) {
-        codec = avcodec_find_encoder_by_name(name.c_str());
-        if (codec) {
-            break;
-        }
+    const AVCodec *codec_default = nullptr;
+
+    // 根据名称优先选择编码器
+    if (!codec_name.empty()) {
+        codec = getCodecByName<false>(codec_name);
     }
 
+    // 根据轨道类型选择默认编码器
+    switch (track->getCodecId()) {
+        case CodecH264:
+            codec_default = getCodec<false>({AV_CODEC_ID_H264});
+            if (!codec || codec->id != AV_CODEC_ID_H264) {
+                codec = getCodec<false>({{"libx264"}, {AV_CODEC_ID_H264}, {"h264_nvenc"}, {"h264_qsv"}, {"h264_vaapi"}});
+            }
+            break;
+        case CodecH265:
+            codec_default = getCodec<false>({AV_CODEC_ID_HEVC});
+            if (!codec || codec->id != AV_CODEC_ID_HEVC) {
+                codec = getCodec<false>({{"libx265"}, {AV_CODEC_ID_HEVC}, {"hevc_nvenc"}, {"hevc_qsv"}, {"hevc_vaapi"}});
+            }
+            break;
+        case CodecAAC:
+            codec_default = getCodec<false>({AV_CODEC_ID_AAC});
+            if (!codec || codec->id != AV_CODEC_ID_AAC) {
+                codec = getCodec<false>({{"aac"}, {AV_CODEC_ID_AAC}});
+            }
+            break;
+        default:
+            throw std::runtime_error("Unsupported codec for encoding.");
+    }
+
+    codec = codec ? codec : codec_default;
     if (!codec) {
         throw std::runtime_error("Failed to find suitable encoder.");
     }
@@ -909,17 +934,42 @@ FFmpegEncoder::FFmpegEncoder(const Track::Ptr &track, int thread_num, const std:
         throw std::runtime_error("Failed to allocate codec context.");
     }
 
-    _encoder_context->thread_count = thread_num;
-
-    // 根据输入轨道设置编码器参数
-    _encoder_context->width = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
-    _encoder_context->height = static_pointer_cast<VideoTrack>(track)->getVideoWidth();
-    _encoder_context->time_base = {1, (int)static_pointer_cast<VideoTrack>(track)->getVideoFps()};
-    _encoder_context->pix_fmt = AV_PIX_FMT_YUV420P;
-
-    if (avcodec_open2(_encoder_context.get(), codec, nullptr) < 0) {
-        throw std::runtime_error("Failed to open codec.");
+    // 设置线程数
+    if (thread_num <= 0) {
+        _encoder_context->thread_count = thread::hardware_concurrency();
+    } else {
+        _encoder_context->thread_count = thread_num;
     }
+
+    // 根据轨道类型设置编码器参数
+    if (track->getTrackType() == TrackVideo) {
+        auto videoTrack = static_pointer_cast<VideoTrack>(track);
+        _encoder_context->width = videoTrack->getVideoWidth();
+        _encoder_context->height = videoTrack->getVideoHeight();
+        _encoder_context->time_base = {1, (int)videoTrack->getVideoFps()};
+        _encoder_context->pix_fmt = AV_PIX_FMT_YUV420P;
+    } else if (track->getTrackType() == TrackAudio) {
+        auto audioTrack = static_pointer_cast<AudioTrack>(track);
+        _encoder_context->sample_rate = audioTrack->getAudioSampleRate();
+        _encoder_context->channels = audioTrack->getAudioChannel();
+        _encoder_context->channel_layout = av_get_default_channel_layout(audioTrack->getAudioChannel());
+        _encoder_context->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    } else {
+        throw std::runtime_error("Unsupported track type for encoding.");
+    }
+
+    // 打开编码器
+    AVDictionary *dict = nullptr;
+    av_dict_set(&dict, "preset", "ultrafast", 0);
+    av_dict_set(&dict, "tune", "zerolatency", 0);
+
+    if (avcodec_open2(_encoder_context.get(), codec, &dict) < 0) {
+        av_dict_free(&dict);
+        throw std::runtime_error(StrPrinter << "Failed to open encoder: " << codec->name);
+    }
+
+    av_dict_free(&dict);
+    InfoL << "Encoder opened successfully: " << codec->name;
 }
 
 FFmpegEncoder::~FFmpegEncoder() {
@@ -966,6 +1016,11 @@ bool FFmpegEncoder::inputFrame_l(const AVFrame *frame, bool live, bool enable_me
     int ret = 0;
     while ((ret = avcodec_receive_packet(_encoder_context.get(), packet)) == 0) {
         onEncode(packet);
+        WarnL << "  Stream Index: %d " << packet->stream_index 
+                << "   Duration: %lld " << packet->duration
+                << " Size: %d bytes = " << packet->size;
+        save_avpacket_to_h264(packet);
+
         av_packet_unref(packet);
     }
 
@@ -985,7 +1040,16 @@ void FFmpegEncoder::setOnEncode(onEncAvframe cb) {
 
 void FFmpegEncoder::onEncode(const AVPacket *packet) {
     if (_cb) {
-        _cb(packet);
+        //从_encoder_context获取_, CodecId codecId, TrackType trackType
+        CodecId codecId     = getCodecIdFromContext(_encoder_context);
+        TrackType trackType = getTrackTypeFromContext(_encoder_context);
+
+
+        if (codecId == CodecInvalid || trackType == TrackInvalid) {
+            ErrorL << "Invalid codec or track type";
+            return;
+        }
+        _cb(packet,codecId,trackType);
     }
 }
 
@@ -1003,7 +1067,7 @@ void FFmpegEncoder::flush() {
 
     while (avcodec_receive_packet(_encoder_context.get(), packet) == 0) {
         onEncode(packet);
-        save_avpacket_to_h264(packet);
+        // save_avpacket_to_h264(packet);
         av_packet_unref(packet);
     }
 
@@ -1038,12 +1102,15 @@ void FFmpegEncoder::save_avpacket_to_h264(const AVPacket *packet) {
         char filename[256];
         time_t now = time(NULL);
         struct tm *t = localtime(&now);
+        // 获取 this 指针的十六进制地址
+        uintptr_t id = reinterpret_cast<uintptr_t>(this);
         snprintf(
             filename, sizeof(filename),
-            "%s/encoded_%04d%02d%02d%02d%02d%02d.h264",
+            "%s/encoded_%04d%02d%02d%02d%02d%02d_%p.h264",
             current_file.c_str(),
             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-            t->tm_hour, t->tm_min, t->tm_sec
+            t->tm_hour, t->tm_min, t->tm_sec,
+            reinterpret_cast<void*>(id)
         );
         
         std::cerr << "save_avpacket_to_h264 filename: " << filename << std::endl;
@@ -1063,6 +1130,65 @@ void FFmpegEncoder::save_avpacket_to_h264(const AVPacket *packet) {
     }
       // Free the copied packet
     av_packet_free(&packet_copy);
+}
+
+
+Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, TrackType trackType) {
+    if (!packet || !packet->data || packet->size <= 0) {
+        WarnL << "Invalid AVPacket";
+        return nullptr;
+    }
+
+    // 使用 FrameImp 的 create 方法创建对象
+    auto frame = FrameImp::create<FrameImp>();
+    
+    // 设置 CodecId 和 TrackType
+    frame->_codec_id = codecId;
+    
+    // 设置时间戳
+    frame->_dts = packet->dts;
+    frame->_pts = packet->pts;
+
+    // 设置数据前缀大小，根据实际协议（例如 H.264 为 4）
+    frame->_prefix_size = 4; 
+
+    // 将 AVPacket 数据复制到 FrameImp 的 _buffer
+    frame->_buffer.assign((char *)packet->data, packet->size);
+
+    return frame;
+}
+
+CodecId getCodecIdFromContext(std::shared_ptr<AVCodecContext> _encoder_context) {
+    if (!_encoder_context) {
+        return CodecInvalid;
+    }
+
+    switch (_encoder_context->codec_id) {
+        case AV_CODEC_ID_H264:
+            return CodecH264;
+        case AV_CODEC_ID_AAC:
+            return CodecAAC;
+        // 添加其他 codec 的映射
+        case AV_CODEC_ID_H265:
+            return CodecH265;
+        default:
+            return CodecInvalid;
+    }
+}
+
+TrackType getTrackTypeFromContext(std::shared_ptr<AVCodecContext> _encoder_context) {
+    if (!_encoder_context) {
+        return TrackInvalid;
+    }
+
+    switch (_encoder_context->codec_type) {
+        case AVMEDIA_TYPE_VIDEO:
+            return TrackVideo;
+        case AVMEDIA_TYPE_AUDIO:
+            return TrackAudio;
+        default:
+            return TrackInvalid;
+    }
 }
 } //namespace mediakit
 #endif//ENABLE_FFMPEG
