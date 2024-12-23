@@ -14,7 +14,7 @@
 #include "H264.h"
 #include "Rtmp/RtmpCodec.h"
 #include "Extension/Track.h"
-
+#include "src/Codec/Transcode.h"
 namespace mediakit {
 /**
  * h264 Rtmp解码类
@@ -97,8 +97,13 @@ public:
     void makeConfigPacket() override;
 
 private:
+   bool inputFrame_l_water(const Track::Ptr & track,const Frame::Ptr &frame);
     RtmpPacket::Ptr _rtmp_packet;
     FrameMerger _merger { FrameMerger::mp4_nal_size };
+
+    FFmpegDecoder::Ptr _decoder;  // FFmpeg 解码器实例
+    FFmpegEncoder::Ptr _encoder;  // FFmpeg 编器实例
+    FFmpegWatermark::Ptr _watermark;  // FFmpeg 水印
 };
 
 }//namespace mediakit

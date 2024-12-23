@@ -578,6 +578,7 @@ bool FFmpegDecoder::decodeFrame(const char *data, size_t size, uint64_t dts, uin
         
         // _watermark->save_avframe_to_yuv(temp_frame);
         onDecode(temp_frame);
+        av_frame_free(&temp_frame);
     }
     return true;
 }
@@ -1016,10 +1017,10 @@ bool FFmpegEncoder::inputFrame_l(const AVFrame *frame, bool live, bool enable_me
     int ret = 0;
     while ((ret = avcodec_receive_packet(_encoder_context.get(), packet)) == 0) {
         onEncode(packet);
-        WarnL << "  Stream Index: %d " << packet->stream_index 
-                << "   Duration: %lld " << packet->duration
-                << " Size: %d bytes = " << packet->size;
-        save_avpacket_to_h264(packet);
+        // WarnL << "  Stream Index: %d " << packet->stream_index 
+        //         << "   Duration: %lld " << packet->duration
+        //         << " Size: %d bytes = " << packet->size;
+        // save_avpacket_to_h264(packet);
 
         av_packet_unref(packet);
     }
