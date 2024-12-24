@@ -197,7 +197,7 @@ public:
     bool inputFrame(const AVFrame *frame, bool live, bool async, bool enable_merge = true);
     void setOnEncode(onEncAvframe cb);
     void flush();
-    const AVCodecContext *getEncodeContext()const;
+    const AVCodecContext *getEncodeContext() const;
 private:
     void onEncode(const AVPacket *packet);
     bool inputFrame_l(const AVFrame *frame, bool live, bool enable_merge);
@@ -215,7 +215,7 @@ private:
     FrameMerger _merger{FrameMerger::h264_prefix};
 };
 
-Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, TrackType trackType);
+Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, TrackType trackType, const AVCodecContext *codecContext);
 CodecId getCodecIdFromContext(const std::shared_ptr<AVCodecContext> _encoder_context);
 TrackType getTrackTypeFromContext(const std::shared_ptr<AVCodecContext> _encoder_context);
 CodecId convertCodecId(AVCodecID avCodecId);

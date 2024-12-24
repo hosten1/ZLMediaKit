@@ -17,9 +17,10 @@
 #include "Transcode.h"
 #include "Common/config.h"
 #define MAX_DELAY_SECOND 3
-
+#include "Extension/Factory.h"
 using namespace std;
 using namespace toolkit;
+
 
 namespace mediakit {
 
@@ -948,6 +949,9 @@ FFmpegEncoder::FFmpegEncoder(const Track::Ptr &track, int thread_num, const std:
         _encoder_context->width = videoTrack->getVideoWidth();
         _encoder_context->height = videoTrack->getVideoHeight();
         _encoder_context->time_base = {1, (int)videoTrack->getVideoFps()};
+        _encoder_context->framerate = av_make_q(videoTrack->getVideoFps(), 1);
+        _encoder_context->gop_size = 50;  // 设置关键帧间隔为 50
+        _encoder_context->max_b_frames = 0;  // 禁用 B 帧
         _encoder_context->pix_fmt = AV_PIX_FMT_YUV420P;
     } else if (track->getTrackType() == TrackAudio) {
         auto audioTrack = static_pointer_cast<AudioTrack>(track);
@@ -1020,7 +1024,7 @@ bool FFmpegEncoder::inputFrame_l(const AVFrame *frame, bool live, bool enable_me
         // WarnL << "  Stream Index: %d " << packet->stream_index 
         //         << "   Duration: %lld " << packet->duration
         //         << " Size: %d bytes = " << packet->size;
-        // save_avpacket_to_h264(packet);
+        save_avpacket_to_h264(packet);
 
         av_packet_unref(packet);
     }
@@ -1134,27 +1138,56 @@ void FFmpegEncoder::save_avpacket_to_h264(const AVPacket *packet) {
 }
 
 
-Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, TrackType trackType) {
+Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, TrackType trackType, const AVCodecContext *codecContext) {
     if (!packet || !packet->data || packet->size <= 0) {
         WarnL << "Invalid AVPacket";
         return nullptr;
     }
 
-    // 使用 FrameImp 的 create 方法创建对象
-    auto frame = FrameImp::create<FrameImp>();
-    
-    // 设置 CodecId 和 TrackType
-    frame->_codec_id = codecId;
-    
-    // 设置时间戳
-    frame->_dts = packet->dts;
-    frame->_pts = packet->pts;
+    if (!codecContext) {
+        WarnL << "Invalid AVCodecContext";
+        return nullptr;
+    }
 
-    // 设置数据前缀大小，根据实际协议（例如 H.264 为 4）
-    frame->_prefix_size = 4; 
+    // 从 codecContext 获取时间基并转换时间戳
+    AVRational time_base = codecContext->time_base;
+    uint64_t dts = av_rescale_q(packet->dts, time_base, AVRational{1, 1000});
+    uint64_t pts = av_rescale_q(packet->pts, time_base, AVRational{1, 1000});
 
-    // 将 AVPacket 数据复制到 FrameImp 的 _buffer
-    frame->_buffer.assign((char *)packet->data, packet->size);
+    // // 计算缓冲区大小
+    // size_t sps_pps_size = 0;
+    // size_t nal_start_code_size = 4;
+    // size_t packet_data_size = packet->size;
+
+    // if ((packet->flags & AV_PKT_FLAG_KEY) && codecContext->extradata && codecContext->extradata_size > 0) {
+    //     sps_pps_size = nal_start_code_size + codecContext->extradata_size;
+    // }
+    // size_t total_size = sps_pps_size + nal_start_code_size + packet_data_size;
+
+    // // 分配内存缓冲区
+    // char *data = new char[total_size];
+    // char *ptr = data; // 用于操作内存的指针
+
+    // // 如果是关键帧，拷贝 SPS 和 PPS 数据
+    // if (sps_pps_size > 0) {
+    //     static const char start_code[] = "\x00\x00\x00\x01";
+    //     memcpy(ptr, start_code, nal_start_code_size); // 添加起始码
+    //     ptr += nal_start_code_size;
+    //     memcpy(ptr, codecContext->extradata, codecContext->extradata_size); // 添加 SPS 和 PPS
+    //     ptr += codecContext->extradata_size;
+    // }
+
+    // // 拷贝当前帧数据
+    // static const char start_code[] = "\x00\x00\x00\x01";
+    // memcpy(ptr, start_code, nal_start_code_size); // 添加起始码
+    // ptr += nal_start_code_size;
+    // memcpy(ptr, packet->data, packet_data_size); // 添加帧数据
+
+    // 使用 Factory::getFrameFromPtr 创建 Frame
+    auto frame = Factory::getFrameFromPtr(codecId, reinterpret_cast<const char*>(packet->data), packet->size, dts, pts);
+
+    // 手动释放缓冲区（Factory::getFrameFromPtr 内部会拷贝数据）
+    // delete[] data;
 
     return frame;
 }
