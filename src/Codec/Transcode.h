@@ -162,6 +162,25 @@ private:
     AVPixelFormat _src_format = AV_PIX_FMT_NONE;
     AVPixelFormat _target_format = AV_PIX_FMT_NONE;
 };
+
+class FFmpegAudioFifo {
+public:
+    FFmpegAudioFifo() = default;
+    ~FFmpegAudioFifo();
+
+    bool Write(const AVFrame *frame);
+    bool Read(AVFrame *frame, int sample_size);
+    int size() const;
+
+private:
+    int _channels = 0;
+    int _samplerate = 0;
+    double _tsp = 0;
+    double _timebase = 0;
+    AVAudioFifo *_fifo = nullptr;
+    AVSampleFormat _format = AV_SAMPLE_FMT_NONE;
+};
+
 class FFmpegWatermark {
 public:
     using Ptr = std::shared_ptr<FFmpegWatermark>;
@@ -185,34 +204,40 @@ private:
     AVIOContext * avio_ctx_ = nullptr;
 };//// class FFmpegWatermark end
 
-class FFmpegEncoder : public TaskManager {
+class FFmpegEncoder : public TaskManager, public CodecInfo {
 public:
     using Ptr = std::shared_ptr<FFmpegEncoder>;
-    using onEncAvframe = std::function<void(const AVPacket * pkt,CodecId codecId, TrackType trackType)>;
+    using onEnc = std::function<void(const Frame::Ptr &)>;
 
-
-    FFmpegEncoder(const Track::Ptr &track, int thread_num = 2, const std::vector<std::string> &codec_name = {});
+    FFmpegEncoder(const Track::Ptr &track, int thread_num = 2);
     ~FFmpegEncoder() override;
 
-    bool inputFrame(const AVFrame *frame, bool live, bool async, bool enable_merge = true);
-    void setOnEncode(onEncAvframe cb);
     void flush();
-    const AVCodecContext *getEncodeContext() const;
-private:
-    void onEncode(const AVPacket *packet);
-    bool inputFrame_l(const AVFrame *frame, bool live, bool enable_merge);
-    bool decodeFrame(const AVFrame *frame, uint64_t dts, uint64_t pts, bool live, bool key_frame);
+    CodecId getCodecId() const override { return _codecId; }
+    const AVCodecContext *getContext() const { return _context.get(); }
+
+    void setOnEncode(onEnc cb) { _cb = std::move(cb); }
+    bool inputFrame(const FFmpegFrame::Ptr &frame, bool async);
     void save_avpacket_to_h264(const AVPacket *packet);
-
+private:
+    bool inputFrame_l(FFmpegFrame::Ptr frame);
+    bool encodeFrame(AVFrame *frame);
+    void onEncode(AVPacket *packet);
+    bool openVideoCodec(int width, int height, int bitrate, const AVCodec *codec);
+    bool openAudioCodec(int samplerate, int channel, int bitrate, const AVCodec *codec);
 
 private:
-    // default merge frame
-    bool _do_merger = true;
-    toolkit::Ticker _ticker;
-    onEncAvframe _cb;
-    std::shared_ptr<AVCodecContext> _encoder_context;
+    onEnc _cb;
+    CodecId _codecId;
+    const AVCodec *_codec = nullptr;
+    AVDictionary *_dict = nullptr;
+    std::shared_ptr<AVCodecContext> _context;
     AVIOContext * avio_ctx_ = nullptr;
-    FrameMerger _merger{FrameMerger::h264_prefix};
+    
+    std::unique_ptr<FFmpegSws> _sws;
+    std::unique_ptr<FFmpegSwr> _swr;
+    std::unique_ptr<FFmpegAudioFifo> _fifo;
+    bool var_frame_size = false;
 };
 
 Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, TrackType trackType, const AVCodecContext *codecContext);
