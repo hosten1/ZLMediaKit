@@ -734,6 +734,41 @@ FFmpegFrame::Ptr FFmpegSwr::inputFrame(const FFmpegFrame::Ptr &frame) {
 
     return nullptr;
 }
+ AVFrame * FFmpegSwr::inputFrame( AVFrame *frame) {
+    if (frame->format == _target_format &&
+        frame->channels == _target_channels &&
+        frame->channel_layout == (uint64_t)_target_channel_layout &&
+        frame->sample_rate == _target_samplerate) {
+        // 不转格式  [AUTO-TRANSLATED:31dc6ae1]
+        // Do not convert format
+        return frame;
+    }
+    if (!_ctx) {
+        _ctx = swr_alloc_set_opts(nullptr, _target_channel_layout, _target_format, _target_samplerate,
+                                  frame->channel_layout, (AVSampleFormat) frame->format,
+                                  frame->sample_rate, 0, nullptr);
+        InfoL << "swr_alloc_set_opts:" << av_get_sample_fmt_name((enum AVSampleFormat) frame->format) << " -> "
+              << av_get_sample_fmt_name(_target_format);
+    }
+    if (_ctx) {
+        AVFrame *out = av_frame_alloc();
+        out->format = _target_format;
+        out->channel_layout = _target_channel_layout;
+        out->channels = _target_channels;
+        out->sample_rate = _target_samplerate;
+        out->pkt_dts = frame->pkt_dts;
+        out->pts = frame->pts;
+
+        int ret = 0;
+        if (0 != (ret = swr_convert_frame(_ctx, out, frame))) {
+            WarnL << "swr_convert_frame failed:" << ffmpeg_err(ret);
+            return nullptr;
+        }
+        return out;
+    }
+
+    return nullptr;
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -760,7 +795,15 @@ FFmpegFrame::Ptr FFmpegSws::inputFrame(const FFmpegFrame::Ptr &frame) {
     int ret;
     return inputFrame(frame, ret, nullptr);
 }
-
+int FFmpegSws::inputFrame( AVFrame *frame, uint8_t *data){
+    int ret;
+    inputFrame(frame, ret, data);
+    return ret;
+}
+AVFrame * FFmpegSws::inputFrame(  AVFrame *frame){
+    int ret;
+    return inputFrame(frame, ret, nullptr);
+}
 FFmpegFrame::Ptr FFmpegSws::inputFrame(const FFmpegFrame::Ptr &frame, int &ret, uint8_t *data) {
     ret = -1;
     TimeTicker2(30, TraceL);
@@ -807,6 +850,55 @@ FFmpegFrame::Ptr FFmpegSws::inputFrame(const FFmpegFrame::Ptr &frame, int &ret, 
     }
     return nullptr;
 }
+AVFrame * FFmpegSws::inputFrame( AVFrame *frame, int &ret, uint8_t *data){
+        ret = -1;
+    TimeTicker2(30, TraceL);
+    auto target_width = _target_width ? _target_width : frame->width;
+    auto target_height = _target_height ? _target_height : frame->height;
+    if (frame->format == _target_format && frame->width == target_width && frame->height == target_height) {
+        // 不转格式  [AUTO-TRANSLATED:31dc6ae1]
+        // Do not convert format
+        return frame;
+    }
+    if (_ctx && (_src_width != frame->width || _src_height != frame->height || _src_format != (enum AVPixelFormat) frame->format)) {
+        // 输入分辨率发生变化了  [AUTO-TRANSLATED:0e4ea2e8]
+        // Input resolution has changed
+        sws_freeContext(_ctx);
+        _ctx = nullptr;
+    }
+    if (!_ctx) {
+        _src_format = (enum AVPixelFormat) frame->format;
+        _src_width = frame->width;
+        _src_height = frame->height;
+        _ctx = sws_getContext(frame->width, frame->height, (enum AVPixelFormat) frame->format, target_width, target_height, _target_format, SWS_FAST_BILINEAR, NULL, NULL, NULL);
+        InfoL << "sws_getContext:" << av_get_pix_fmt_name((enum AVPixelFormat) frame->format) << " -> " << av_get_pix_fmt_name(_target_format);
+    }
+    if (_ctx) {
+        // auto out = std::make_shared<FFmpegFrame>();
+         AVFrame *out = av_frame_alloc();
+        if (!out->data[0]) {
+            if (data) {
+                av_image_fill_arrays(out->data, out->linesize, data, _target_format, target_width, target_height, 32);
+            } else {
+                // out->fillPicture(_target_format, target_width, target_height);
+            }
+        }
+        if (0 >= (ret = sws_scale(_ctx, frame->data, frame->linesize, 0, frame->height, out->data, out->linesize))) {
+            WarnL << "sws_scale failed:" << ffmpeg_err(ret);
+            return nullptr;
+        }
+
+        out->format = _target_format;
+        out->width = target_width;
+        out->height = target_height;
+        out->pkt_dts = frame->pkt_dts;
+        out->pts = frame->pts;
+        return out;
+    }
+    return nullptr;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 FFmpegWatermark::FFmpegWatermark(const std::string &watermark_text) 
@@ -1206,6 +1298,59 @@ bool FFmpegEncoder::inputFrame_l(FFmpegFrame::Ptr input) {
             if (_sws) {
                 input = _sws->inputFrame(input);
                 frame = input->get();
+            } else {
+                // @todo reopen videocodec?
+                openVideoCodec(frame->width, frame->height, 512000, _codec);
+            }
+        }
+    }
+    return encodeFrame(frame);
+}
+bool FFmpegEncoder::inputFrame( AVFrame *frame, bool async) {
+    if (async && !TaskManager::isEnabled() && getContext()->codec_type == AVMEDIA_TYPE_VIDEO) {
+        //开启异步编码，且为视频，尝试启动异步解码线程
+        startThread("encoder thread");
+    }
+
+    if (!async || !TaskManager::isEnabled()) {
+        return inputFrame_l(frame);
+    }
+
+    return addEncodeTask([this, frame]() { inputFrame_l(frame); });
+}
+
+bool FFmpegEncoder::inputFrame_l(AVFrame *frame) {
+    // AVFrame *frame = input->get();
+    AVCodecContext *context = _context.get();
+    if (getTrackType() == TrackAudio) {
+        if (_swr) {
+            // 转成同样采样率和通道
+            frame = _swr->inputFrame((AVFrame*)frame);
+            // frame = input->get();
+            // 保证每次塞给解码器的都是一帧音频
+            if (!var_frame_size && _context->frame_size && frame->nb_samples != _context->frame_size) {
+                // add this frame to _audio_buffer
+                if (!_fifo)
+                    _fifo.reset(new FFmpegAudioFifo());
+                // TraceL << "in " << frame->pts << ",samples " << frame->nb_samples;
+                _fifo->Write(frame);
+                while (1) {
+                    FFmpegFrame audio_frame;
+                    if (!_fifo->Read(audio_frame.get(), _context->frame_size)){
+                        break;
+                    }
+                    if (!encodeFrame(audio_frame.get())) {
+                        break;
+                    }
+                }
+                return true;
+            }
+        }
+    } else {
+        if (frame->format != context->pix_fmt || frame->width != context->width || frame->height != context->height) {
+            if (_sws) {
+                frame = _sws->inputFrame((AVFrame*)frame);
+                // frame = input->get();
             } else {
                 // @todo reopen videocodec?
                 openVideoCodec(frame->width, frame->height, 512000, _codec);

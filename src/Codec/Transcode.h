@@ -66,6 +66,7 @@ public:
     FFmpegSwr(AVSampleFormat output, int channel, int channel_layout, int samplerate);
     ~FFmpegSwr();
     FFmpegFrame::Ptr inputFrame(const FFmpegFrame::Ptr &frame);
+    AVFrame* inputFrame(AVFrame *frame);
 
 private:
     int _target_channels;
@@ -149,9 +150,13 @@ public:
     ~FFmpegSws();
     FFmpegFrame::Ptr inputFrame(const FFmpegFrame::Ptr &frame);
     int inputFrame(const FFmpegFrame::Ptr &frame, uint8_t *data);
+    AVFrame * inputFrame(AVFrame *frame);
+    int inputFrame(AVFrame *frame, uint8_t *data);
 
 private:
     FFmpegFrame::Ptr inputFrame(const FFmpegFrame::Ptr &frame, int &ret, uint8_t *data);
+    AVFrame * inputFrame(AVFrame *frame, int &ret, uint8_t *data);
+
 
 private:
     int _target_width = 0;
@@ -218,9 +223,12 @@ public:
 
     void setOnEncode(onEnc cb) { _cb = std::move(cb); }
     bool inputFrame(const FFmpegFrame::Ptr &frame, bool async);
+    bool inputFrame(AVFrame *frame, bool async);
+
     void save_avpacket_to_h264(const AVPacket *packet);
 private:
     bool inputFrame_l(FFmpegFrame::Ptr frame);
+    bool inputFrame_l(AVFrame *frame);
     bool encodeFrame(AVFrame *frame);
     void onEncode(AVPacket *packet);
     bool openVideoCodec(int width, int height, int bitrate, const AVCodec *codec);
@@ -233,7 +241,7 @@ private:
     AVDictionary *_dict = nullptr;
     std::shared_ptr<AVCodecContext> _context;
     AVIOContext * avio_ctx_ = nullptr;
-    
+
     std::unique_ptr<FFmpegSws> _sws;
     std::unique_ptr<FFmpegSwr> _swr;
     std::unique_ptr<FFmpegAudioFifo> _fifo;
