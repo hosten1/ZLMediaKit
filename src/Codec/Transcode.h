@@ -252,6 +252,8 @@ Frame::Ptr convertAVPacketToFrame(const AVPacket *packet, CodecId codecId, Track
 CodecId getCodecIdFromContext(const std::shared_ptr<AVCodecContext> _encoder_context);
 TrackType getTrackTypeFromContext(const std::shared_ptr<AVCodecContext> _encoder_context);
 CodecId convertCodecId(AVCodecID avCodecId);
+
+void save_packet_to_yuv(const Frame::Ptr &frame);
 }//namespace mediakit
 #endif// ENABLE_FFMPEG
 #endif //ZLMEDIAKIT_TRANSCODE_H

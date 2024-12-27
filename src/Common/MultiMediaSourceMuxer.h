@@ -22,6 +22,7 @@
 #include "Rtmp/RtmpMediaSourceMuxer.h"
 #include "TS/TSMediaSourceMuxer.h"
 #include "FMP4/FMP4MediaSourceMuxer.h"
+#include "Codec/Transcode.h"
 
 namespace mediakit {
 
@@ -234,6 +235,9 @@ private:
     void createGopCacheIfNeed();
     std::shared_ptr<MediaSinkInterface> makeRecorder(MediaSource &sender, Recorder::type type);
 
+    bool inputFrame_l_water(const Track::Ptr & track,const Frame::Ptr &frame);
+    bool onTrackFrame_l_(const Frame::Ptr &frame);
+
 private:
     bool _is_enable = false;
     bool _create_in_poller = false;
@@ -259,6 +263,9 @@ private:
     // 对象个数统计  [AUTO-TRANSLATED:3b43e8c2]
     // Object count statistics
     toolkit::ObjectStatistic<MultiMediaSourceMuxer> _statistic;
+    FFmpegDecoder::Ptr _decoder;  // FFmpeg 解码器实例
+    FFmpegEncoder::Ptr _encoder;  // FFmpeg 编器实例
+    FFmpegWatermark::Ptr _watermark;  // FFmpeg 水印
 };
 
 }//namespace mediakit

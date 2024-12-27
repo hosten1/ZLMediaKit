@@ -983,13 +983,27 @@ end:
 
 bool FFmpegWatermark::addWatermark( AVFrame *frame, AVFrame *output_frame) {
     // std::cout << "addWatermark frame->width="<< frame->width  << " frame->height="<< frame->height << std::endl;
-    if (av_buffersrc_add_frame(buffersrc_ctx, frame) < 0) {
-        std::cerr << "Error while feeding frame to filter graph" << std::endl;
+    if (!frame || !frame->data[0]) {
+        std::cerr << "Invalid input frame" << std::endl;
+        return false;
+    }
+    if (!buffersrc_ctx || !buffersink_ctx) {
+        std::cerr << "Filter graph not initialized properly" << std::endl;
+        return false;
+    }
+    char err_buf[AV_ERROR_MAX_STRING_SIZE] = {0};
+
+    int ret = av_buffersrc_add_frame(buffersrc_ctx, frame);
+    if (ret < 0) {
+        av_make_error_string(err_buf, AV_ERROR_MAX_STRING_SIZE, ret);
+        std::cerr << "Error while feeding frame to filter graph: " << err_buf << std::endl;
         return false;
     }
 
-    if (av_buffersink_get_frame(buffersink_ctx, output_frame) < 0) {
-        std::cerr << "Error while getting frame from filter graph" << std::endl;
+    ret = av_buffersink_get_frame(buffersink_ctx, output_frame);
+    if (ret < 0) {
+        av_make_error_string(err_buf, AV_ERROR_MAX_STRING_SIZE, ret);
+        std::cerr << "Error while getting frame from filter graph: " << err_buf << std::endl;
         return false;
     }
     // save_avframe_to_yuv(output_frame);
@@ -1082,6 +1096,9 @@ void setupContext(AVCodecContext *_context, int bitrate) {
 
 FFmpegEncoder::FFmpegEncoder(const Track::Ptr &track, int thread_num) {
     setupFFmpeg();
+    if(track == nullptr){
+        return;
+    }
     const AVCodec *codec = nullptr;
     const AVCodec *codec_default = nullptr;
     _codecId = track->getCodecId();
@@ -1308,7 +1325,7 @@ bool FFmpegEncoder::inputFrame_l(FFmpegFrame::Ptr input) {
 }
 bool FFmpegEncoder::inputFrame( AVFrame *frame, bool async) {
     if (async && !TaskManager::isEnabled() && getContext()->codec_type == AVMEDIA_TYPE_VIDEO) {
-        //开启异步编码，且为视频，尝试启动异步解码线程
+        // 开启异步编码，且为视频，尝试启动异步解码线程
         startThread("encoder thread");
     }
 
@@ -1316,16 +1333,27 @@ bool FFmpegEncoder::inputFrame( AVFrame *frame, bool async) {
         return inputFrame_l(frame);
     }
 
-    return addEncodeTask([this, frame]() { inputFrame_l(frame); });
+    // 将 AVFrame 包装为智能指针，确保生命周期独立管理
+    auto frame_ptr = std::shared_ptr<AVFrame>(av_frame_clone(frame), [](AVFrame *p) {
+        av_frame_free(&p); // 自定义释放函数
+    });
+
+    return addEncodeTask([this, frame_ptr]() { 
+        inputFrame_l(frame_ptr.get()); // 在 Lambda 中使用智能指针管理的对象
+    });
 }
 
 bool FFmpegEncoder::inputFrame_l(AVFrame *frame) {
+    if(frame->width<= 0 || frame->height <= 0){
+        WarnL << "Error inputFrame_l a frame " << frame->pts ;
+        return false;
+    }
     // AVFrame *frame = input->get();
     AVCodecContext *context = _context.get();
     if (getTrackType() == TrackAudio) {
         if (_swr) {
             // 转成同样采样率和通道
-            frame = _swr->inputFrame((AVFrame*)frame);
+            frame = _swr->inputFrame(frame);
             // frame = input->get();
             // 保证每次塞给解码器的都是一帧音频
             if (!var_frame_size && _context->frame_size && frame->nb_samples != _context->frame_size) {
@@ -1349,7 +1377,7 @@ bool FFmpegEncoder::inputFrame_l(AVFrame *frame) {
     } else {
         if (frame->format != context->pix_fmt || frame->width != context->width || frame->height != context->height) {
             if (_sws) {
-                frame = _sws->inputFrame((AVFrame*)frame);
+                frame = _sws->inputFrame(frame);
                 // frame = input->get();
             } else {
                 // @todo reopen videocodec?
@@ -1361,7 +1389,7 @@ bool FFmpegEncoder::inputFrame_l(AVFrame *frame) {
 }
 
 bool FFmpegEncoder::encodeFrame(AVFrame *frame) {
-    // TraceL << "enc " << frame->pts;
+    TraceL << "enc " << frame->pts;
     int ret = avcodec_send_frame(_context.get(), frame);
     if (ret < 0) {
         WarnL << "Error sending a frame " << frame->pts << " to the encoder: " << ffmpeg_err(ret);
@@ -1383,6 +1411,11 @@ bool FFmpegEncoder::encodeFrame(AVFrame *frame) {
 }
 
 void FFmpegEncoder::onEncode(AVPacket *packet) {
+    // save_avpacket_to_h264(packet);
+    if (!packet || packet->size <= 0) {
+        fprintf(stderr, "Invalid packet or size.\n");
+        return;
+    }
     // process frame
     if (!_cb)
         return;
@@ -1546,6 +1579,43 @@ TrackType getTrackTypeFromContext(std::shared_ptr<AVCodecContext> _encoder_conte
         default:
             return TrackInvalid;
     }
+}
+
+thread_local FFmpegEncoder encoder_Writer_(nullptr);
+void save_packet_to_yuv(const Frame::Ptr &frame) {
+    
+    const char *data = frame->data();
+    size_t size = frame->size();
+
+    uint64_t dts = frame->dts();
+    uint64_t pts = frame->pts();
+    bool key_frame = frame->keyFrame();
+
+    AVPacket *pkt = av_packet_alloc();
+    if (!pkt) {
+        fprintf(stderr, "Failed to allocate AVPacket.\n");
+        return;
+    }
+    pkt->data = (uint8_t *) av_malloc(size);
+    if (!pkt->data) {
+        std::cerr << "Failed to allocate memory for AVPacket data" << std::endl;
+        av_packet_free(&pkt);
+        return;
+    }
+
+    memcpy(pkt->data, data, size);
+    pkt->size = size;
+    pkt->dts = dts;
+    pkt->pts = pts;
+    if (key_frame) {
+        pkt->flags |= AV_PKT_FLAG_KEY;
+    }
+
+    {
+        encoder_Writer_.save_avpacket_to_h264(pkt);
+    }
+
+    av_packet_free(&pkt);
 }
 } //namespace mediakit
 #endif//ENABLE_FFMPEG

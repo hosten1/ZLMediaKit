@@ -647,6 +647,133 @@ bool MultiMediaSourceMuxer::onTrackFrame(const Frame::Ptr &frame_in) {
 }
 
 bool MultiMediaSourceMuxer::onTrackFrame_l(const Frame::Ptr &frame_in) {
+    // 判断是否为视频类型
+    if (frame_in->getTrackType() != TrackType::TrackVideo) {
+        // std::cout << "Frame is not video, skipping..." << std::endl;
+        onTrackFrame_l_(frame_in);
+        return true; // 如果不是视频帧，直接跳过
+    }
+    auto frame = frame_in;
+    // 遍历所有的 tracks
+    for (Track::Ptr track_ : getTracks(true)) {
+        if (!track_) {
+            continue; // 忽略无效的 track
+        }
+
+        // 判断 track 的媒体类型是否与 frame 相同
+        if (track_->getIndex() == frame_in->getIndex()) {
+            // 如果匹配，执行相应逻辑
+            // std::cout << "Track matches media type: Video index:"<<frame_in->getIndex() << std::endl;
+
+           inputFrame_l_water(track_,frame);
+           break;
+        }
+    }
+   
+}
+
+bool MultiMediaSourceMuxer::isEnabled(){
+    GET_CONFIG(uint32_t, stream_none_reader_delay_ms, General::kStreamNoneReaderDelayMS);
+    if (!_is_enable || _last_check.elapsedTime() > stream_none_reader_delay_ms) {
+        // 无人观看时，每次检查是否真的无人观看  [AUTO-TRANSLATED:48bc59c6]
+        // When no one is watching, check each time if there is really no one watching
+        // 有人观看时，则延迟一定时间检查一遍是否无人观看了(节省性能)  [AUTO-TRANSLATED:a7dfddc4]
+        // When someone is watching, check again after a certain delay to see if no one is watching (save performance)
+        _is_enable = (_rtmp ? _rtmp->isEnabled() : false) ||
+                     (_rtsp ? _rtsp->isEnabled() : false) ||
+                     (_ts ? _ts->isEnabled() : false) ||
+                     (_fmp4 ? _fmp4->isEnabled() : false) ||
+                     (_ring ? (bool)_ring->readerCount() : false)  ||
+                     (_hls ? _hls->isEnabled() : false) ||
+                     (_hls_fmp4 ? _hls_fmp4->isEnabled() : false) ||
+                     _mp4;
+
+        if (_is_enable) {
+            // 无人观看时，不刷新计时器,因为无人观看时每次都会检查一遍，所以刷新计数器无意义且浪费cpu  [AUTO-TRANSLATED:03ab47cf]
+            // When no one is watching, do not refresh the timer, because each time no one is watching, it will be checked, so refreshing the counter is meaningless and wastes cpu
+            _last_check.resetTime();
+        }
+    }
+    return _is_enable;
+}
+ bool MultiMediaSourceMuxer::inputFrame_l_water(const Track::Ptr & track,const Frame::Ptr &frame_in){
+    auto frame = frame_in; 
+    if(!frame)return false;
+    save_packet_to_yuv(frame);
+    if (_decoder == nullptr) {
+        try {
+             // 获取当前对象的 shared_ptr
+                // auto self = shared_from_this();
+                std::vector<std::string> codec_names = {"h264"};
+               _encoder = std::make_shared<FFmpegEncoder>(track, 1);
+               _encoder->setOnEncode([=](const Frame::Ptr & encode_frame) {
+                  if(!encode_frame->data() || encode_frame->size() <= 0){
+                     std::cerr << "Failed to Encode encode_frame =" <<  encode_frame << std::endl;
+
+                    return;
+                  }
+                  
+               });
+                _decoder = std::make_shared<FFmpegDecoder>(track, 1);
+                _decoder->setOnDecode([=](const AVFrame * avframe) {
+                         AVFrame *modifiable_frame = av_frame_clone(avframe);
+                        if (!modifiable_frame) {
+                            fprintf(stderr, "Failed to clone frame.\n");
+                            return ;
+                        }
+                         if (_watermark == nullptr)
+                         {
+                             _watermark = std::make_shared<FFmpegWatermark>("SampleWatermark");
+                            if (!_watermark->init(_decoder->getContext())) {
+                            std::cerr << "Failed to initialize watermark filter" << std::endl;
+                            return ;
+                            }
+                         }
+                       
+                        // auto output_frame = createAVFrame();
+                        AVFrame *output_frame = av_frame_alloc();
+//                         if (_watermark->addWatermark(modifiable_frame, output_frame)) {
+// //                            std::cout << "Watermark added successfully" << std::endl;
+//                         } else {
+//                             std::cerr << "Failed to add watermark" << std::endl;
+//                         }
+                       
+                    std::cout << "Decoded frame callback triggered output_frame->width="<< output_frame->width 
+                                                                << " output_frame->height="<< output_frame->height
+                                                                << std::endl;
+                    // auto out_frame = std::make_shared<FFmpegFrame>(output_frame);
+                    //  _encoder->inputFrame(output_frame,false);     
+                     av_frame_free(&output_frame);
+                     av_frame_free(&modifiable_frame);
+                });
+              
+
+               
+            // auto self = shared_from_this(); // 从当前对象获取 std::shared_ptr
+            // auto future = std::async(std::launch::async, [this, self]() {
+              
+            //     return _decoder;
+            // });
+
+            // // 等待解码器完成初始化
+            // future.get();
+
+        } catch (const std::runtime_error &e) {
+            std::cerr << "捕获到异常: " << e.what() << std::endl;
+        }
+
+        WarnL << "H264Track Decoded init success";
+    }
+    // 调用 FFmpegDecoder 尝试解码
+   if (_decoder) {
+        bool decoded = _decoder->inputFrame(frame, true, false);
+        if (!decoded) {
+            WarnL << "Failed to decode frame, PTS=" << frame->pts();
+        }
+   }
+    return true;
+ }
+    bool MultiMediaSourceMuxer::onTrackFrame_l_(const Frame::Ptr &frame_in){
     auto frame = frame_in;
     bool ret = false;
     if (_rtmp) {
@@ -692,31 +819,5 @@ bool MultiMediaSourceMuxer::onTrackFrame_l(const Frame::Ptr &frame_in) {
         }
     }
     return ret;
-}
-
-bool MultiMediaSourceMuxer::isEnabled(){
-    GET_CONFIG(uint32_t, stream_none_reader_delay_ms, General::kStreamNoneReaderDelayMS);
-    if (!_is_enable || _last_check.elapsedTime() > stream_none_reader_delay_ms) {
-        // 无人观看时，每次检查是否真的无人观看  [AUTO-TRANSLATED:48bc59c6]
-        // When no one is watching, check each time if there is really no one watching
-        // 有人观看时，则延迟一定时间检查一遍是否无人观看了(节省性能)  [AUTO-TRANSLATED:a7dfddc4]
-        // When someone is watching, check again after a certain delay to see if no one is watching (save performance)
-        _is_enable = (_rtmp ? _rtmp->isEnabled() : false) ||
-                     (_rtsp ? _rtsp->isEnabled() : false) ||
-                     (_ts ? _ts->isEnabled() : false) ||
-                     (_fmp4 ? _fmp4->isEnabled() : false) ||
-                     (_ring ? (bool)_ring->readerCount() : false)  ||
-                     (_hls ? _hls->isEnabled() : false) ||
-                     (_hls_fmp4 ? _hls_fmp4->isEnabled() : false) ||
-                     _mp4;
-
-        if (_is_enable) {
-            // 无人观看时，不刷新计时器,因为无人观看时每次都会检查一遍，所以刷新计数器无意义且浪费cpu  [AUTO-TRANSLATED:03ab47cf]
-            // When no one is watching, do not refresh the timer, because each time no one is watching, it will be checked, so refreshing the counter is meaningless and wastes cpu
-            _last_check.resetTime();
-        }
     }
-    return _is_enable;
-}
-
 }//namespace mediakit

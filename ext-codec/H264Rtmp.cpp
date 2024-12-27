@@ -15,7 +15,16 @@ using namespace std;
 using namespace toolkit;
 
 namespace mediakit {
-
+// 创建 AVFrame 的自定义管理器
+std::shared_ptr<AVFrame> createAVFrame() {
+    AVFrame* raw_frame = av_frame_alloc();  // 使用 FFmpeg 的分配函数
+    if (!raw_frame) {
+        throw std::runtime_error("Failed to allocate AVFrame");
+    }
+    return std::shared_ptr<AVFrame>(raw_frame, [](AVFrame* frame) {
+        av_frame_free(&frame);  // 自定义删除器，确保内存安全释放
+    });
+}
 void H264RtmpDecoder::inputRtmp(const RtmpPacket::Ptr &pkt) {
     if (pkt->isConfigFrame()) {
         CHECK_RET(pkt->size() > 5);
@@ -94,38 +103,45 @@ void H264RtmpEncoder::makeConfigPacket() {
     RtmpCodec::inputRtmp(pkt);
 }
 bool H264RtmpEncoder::inputFrame_l_water(const Track::Ptr & track,const Frame::Ptr &frame){
+    if(!frame)return false;
     if (_decoder == nullptr) {
         try {
              // 获取当前对象的 shared_ptr
                 // auto self = shared_from_this();
                 std::vector<std::string> codec_names = {"h264"};
-               _encoder = std::make_shared<FFmpegEncoder>(track, 1,codec_names);
-               _encoder->setOnEncode([=](const AVPacket * packet,CodecId codecId, TrackType trackType) {
+               _encoder = std::make_shared<FFmpegEncoder>(track, 1);
+               _encoder->setOnEncode([=](const Frame::Ptr & encode_frame) {
+                  if(!encode_frame->data() || encode_frame->size() <= 0){
+                     std::cerr << "Failed to Encode encode_frame =" <<  encode_frame << std::endl;
+
+                    return;
+                  }
                     // // 转换 AVPacket 到 FrameImp
-                    auto waterFrame = convertAVPacketToFrame(packet, codecId, trackType);
+                        // const AVCodecContext *codecContext = _encoder->getEncodeContext(); // 包含 SPS/PPS 数据
+			            // auto waterFrame = convertAVPacketToFrame(packet, codecId, trackType,codecContext);
                     
-                bool retB = _merger.inputFrame(waterFrame, [this,frame](uint64_t dts, uint64_t pts, const Buffer::Ptr &, bool have_key_frame) {
-                        
-                        // flags
-                        _rtmp_packet->buffer[0] = (uint8_t)RtmpVideoCodec::h264 | ((uint8_t)(have_key_frame ? RtmpFrameType::key_frame : RtmpFrameType::inter_frame) << 4);
-                        _rtmp_packet->buffer[1] = (uint8_t)RtmpH264PacketType::h264_nalu;
-                        int32_t cts = pts - dts;
-                        // cts
-                        set_be24(&_rtmp_packet->buffer[2], cts);
-                        _rtmp_packet->time_stamp = dts;
-                        _rtmp_packet->body_size = _rtmp_packet->buffer.size();
-                        _rtmp_packet->chunk_id = CHUNK_VIDEO;
-                        _rtmp_packet->stream_index = STREAM_MEDIA;
-                        _rtmp_packet->type_id = MSG_VIDEO;
-                        // 输出rtmp packet  [AUTO-TRANSLATED:d72e89a7]
-                        // Output rtmp packet
-                        RtmpCodec::inputRtmp(_rtmp_packet);
-                        _rtmp_packet = nullptr;
-                    }, &_rtmp_packet->buffer);
+                    // bool retB = _merger.inputFrame(encode_frame, [this,encode_frame](uint64_t dts, uint64_t pts, const Buffer::Ptr &, bool have_key_frame) {
+                    //     // flags
+                    //     _rtmp_packet->buffer[0] = (uint8_t)RtmpVideoCodec::h264 | ((uint8_t)(have_key_frame ? RtmpFrameType::key_frame : RtmpFrameType::inter_frame) << 4);
+                    //     _rtmp_packet->buffer[1] = (uint8_t)RtmpH264PacketType::h264_nalu;
+                    //     int32_t cts = pts - dts;
+                    //     // cts
+                    //     set_be24(&_rtmp_packet->buffer[2], cts);
+                    //     _rtmp_packet->time_stamp = dts;
+                    //     _rtmp_packet->body_size = _rtmp_packet->buffer.size();
+                    //     _rtmp_packet->chunk_id = CHUNK_VIDEO;
+                    //     _rtmp_packet->stream_index = STREAM_MEDIA;
+                    //     _rtmp_packet->type_id = MSG_VIDEO;
+                    //     // 输出rtmp packet  [AUTO-TRANSLATED:d72e89a7]
+                    //     // Output rtmp packet
+                    //     RtmpCodec::inputRtmp(_rtmp_packet);
+                    //     _rtmp_packet = nullptr;
+                    // }, &_rtmp_packet->buffer);
+                  
                });
                 _decoder = std::make_shared<FFmpegDecoder>(track, 1);
-                _decoder->setOnDecode([=](const AVFrame * frame) {
-                         AVFrame *modifiable_frame = av_frame_clone(frame);
+                _decoder->setOnDecode([=](const AVFrame * avframe) {
+                         AVFrame *modifiable_frame = av_frame_clone(avframe);
                         if (!modifiable_frame) {
                             fprintf(stderr, "Failed to clone frame.\n");
                             return ;
@@ -139,9 +155,10 @@ bool H264RtmpEncoder::inputFrame_l_water(const Track::Ptr & track,const Frame::P
                             }
                          }
                        
+                        // auto output_frame = createAVFrame();
                         AVFrame *output_frame = av_frame_alloc();
                         if (_watermark->addWatermark(modifiable_frame, output_frame)) {
-                            std::cout << "Watermark added successfully" << std::endl;
+//                            std::cout << "Watermark added successfully" << std::endl;
                         } else {
                             std::cerr << "Failed to add watermark" << std::endl;
                         }
@@ -149,7 +166,8 @@ bool H264RtmpEncoder::inputFrame_l_water(const Track::Ptr & track,const Frame::P
                     // std::cout << "Decoded frame callback triggered output_frame->width="<< output_frame->width 
                     //                                             << " output_frame->height="<< output_frame->height
                     //                                             << std::endl;
-                     _encoder->inputFrame(output_frame,true, false);     
+                    // auto out_frame = std::make_shared<FFmpegFrame>(output_frame);
+                     _encoder->inputFrame(output_frame,true);     
                      av_frame_free(&output_frame);
                      av_frame_free(&modifiable_frame);
                 });

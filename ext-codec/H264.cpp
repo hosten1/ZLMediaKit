@@ -310,76 +310,76 @@ bool H264Track::inputFrame_l(const Frame::Ptr &frame) {
     if (_width == 0 && ready()) {
         update();
     }
-    
+    // ret = inputFrame_l_water(frame);
     return ret;
 }
 bool H264Track::inputFrame_l_water(const Frame::Ptr &frame){
-    if (_decoder == nullptr) {
-        try {
-             // 获取当前对象的 shared_ptr
-                auto self = shared_from_this();
-                std::vector<std::string> codec_names = {"h264"};
-               _encoder = std::make_shared<FFmpegEncoder>(self, 1,codec_names);
-               _encoder->setOnEncode([=](const AVPacket * packet,CodecId codecId, TrackType trackType) {
-                    // // 转换 AVPacket 到 FrameImp
-                    // auto waterFrame = convertAVPacketToFrame(packet, codecId, trackType);
-                    // VideoTrack::inputFrame(waterFrame);
-               });
-                _decoder = std::make_shared<FFmpegDecoder>(self, 1);
-                _decoder->setOnDecode([=](const AVFrame * frame) {
-                         AVFrame *modifiable_frame = av_frame_clone(frame);
-                        if (!modifiable_frame) {
-                            fprintf(stderr, "Failed to clone frame.\n");
-                            return ;
-                        }
-                         if (_watermark == nullptr)
-                         {
-                             _watermark = std::make_shared<FFmpegWatermark>("SampleWatermark");
-                            if (!_watermark->init(_decoder->getContext())) {
-                            std::cerr << "Failed to initialize watermark filter" << std::endl;
-                            return ;
-                            }
-                         }
+//     if (_decoder == nullptr) {
+//         try {
+//              // 获取当前对象的 shared_ptr
+//                 auto self = shared_from_this();
+//                 std::vector<std::string> codec_names = {"h264"};
+//                _encoder = std::make_shared<FFmpegEncoder>(self, 1,codec_names);
+//                _encoder->setOnEncode([=](const AVPacket * packet,CodecId codecId, TrackType trackType) {
+//                     // // 转换 AVPacket 到 FrameImp
+//                     // auto waterFrame = convertAVPacketToFrame(packet, codecId, trackType);
+//                     // VideoTrack::inputFrame(waterFrame);
+//                });
+//                 _decoder = std::make_shared<FFmpegDecoder>(self, 1);
+//                 _decoder->setOnDecode([=](const AVFrame * frame) {
+//                          AVFrame *modifiable_frame = av_frame_clone(frame);
+//                         if (!modifiable_frame) {
+//                             fprintf(stderr, "Failed to clone frame.\n");
+//                             return ;
+//                         }
+//                          if (_watermark == nullptr)
+//                          {
+//                              _watermark = std::make_shared<FFmpegWatermark>("SampleWatermark");
+//                             if (!_watermark->init(_decoder->getContext())) {
+//                             std::cerr << "Failed to initialize watermark filter" << std::endl;
+//                             return ;
+//                             }
+//                          }
                        
-                        AVFrame *output_frame = av_frame_alloc();
-                        if (_watermark->addWatermark(modifiable_frame, output_frame)) {
-                            std::cout << "Watermark added successfully" << std::endl;
-                        } else {
-                            std::cerr << "Failed to add watermark" << std::endl;
-                        }
+//                         AVFrame *output_frame = av_frame_alloc();
+//                         if (_watermark->addWatermark(modifiable_frame, output_frame)) {
+//                             std::cout << "Watermark added successfully" << std::endl;
+//                         } else {
+//                             std::cerr << "Failed to add watermark" << std::endl;
+//                         }
                        
-                    std::cout << "Decoded frame callback triggered output_frame->width="<< output_frame->width 
-                                                                << " output_frame->height="<< output_frame->height
-                                                                << std::endl;
-                     _encoder->inputFrame(output_frame,true, false);     
-                     av_frame_free(&output_frame);
-                     av_frame_free(&modifiable_frame);
-                });
+//                     std::cout << "Decoded frame callback triggered output_frame->width="<< output_frame->width 
+//                                                                 << " output_frame->height="<< output_frame->height
+//                                                                 << std::endl;
+//                      _encoder->inputFrame(output_frame,true, false);     
+//                      av_frame_free(&output_frame);
+//                      av_frame_free(&modifiable_frame);
+//                 });
               
 
                
-            // auto self = shared_from_this(); // 从当前对象获取 std::shared_ptr
-            // auto future = std::async(std::launch::async, [this, self]() {
+//             // auto self = shared_from_this(); // 从当前对象获取 std::shared_ptr
+//             // auto future = std::async(std::launch::async, [this, self]() {
               
-            //     return _decoder;
-            // });
+//             //     return _decoder;
+//             // });
 
-            // // 等待解码器完成初始化
-            // future.get();
+//             // // 等待解码器完成初始化
+//             // future.get();
 
-        } catch (const std::runtime_error &e) {
-            std::cerr << "捕获到异常: " << e.what() << std::endl;
-        }
+//         } catch (const std::runtime_error &e) {
+//             std::cerr << "捕获到异常: " << e.what() << std::endl;
+//         }
 
-        WarnL << "H264Track Decoded init success";
-    }
-    // 调用 FFmpegDecoder 尝试解码
-   if (_decoder) {
-        bool decoded = _decoder->inputFrame(frame, true, false);
-        if (!decoded) {
-            WarnL << "Failed to decode frame, PTS=" << frame->pts();
-        }
-   }
+//         WarnL << "H264Track Decoded init success";
+//     }
+//     // 调用 FFmpegDecoder 尝试解码
+//    if (_decoder) {
+//         bool decoded = _decoder->inputFrame(frame, true, false);
+//         if (!decoded) {
+//             WarnL << "Failed to decode frame, PTS=" << frame->pts();
+//         }
+//    }
     return true;
 }
 
